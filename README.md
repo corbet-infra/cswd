@@ -153,6 +153,21 @@ did not keep the drive online. A raised timeout also keeps a very slow drive in 
 timeout. If a host stays this slow after that (disk 100 % busy, tens of seconds per probe), the account is the problem, not the settings: ask the provider for another
 host (a dead drive costs one of the two parity shards).
 
+**Endpoints by DNS name: what happens when DNS misbehaves** (`rustfs_cluster_domain`; RustFS 1.0.3, measured with four nodes in
+private network namespaces on the playground box, a controllable DNS server, `Restart=always RestartSec=10` emulated; the
+resolver of the static musl binary has no cache and honours `/etc/resolv.conf` only):
+
+| Situation | Behaviour |
+|---|---|
+| Name of a peer or of the node itself gives SERVFAIL, timeout or an unreachable resolver at **start** | The node exits within 2-4 s with `FATAL ... local-host detection failed for host '<name>': failed to lookup address information: Try again`; the supervisor restarts it every ~12 s (9 restarts in 100 s), it needs no hands: **full cluster 10 s after DNS returned**. |
+| A peer name gives NXDOMAIN at start (record missing) | The node stays alive, listens on nothing, retries; **ready 12-22 s after the record appeared**. No crash loop. |
+| Resolver unreachable (refused) or black-holed **while the cluster runs** | Running nodes keep serving, but they cannot re-resolve when a pooled connection breaks: peers mark the affected drives faulty one by one (in the black-hole run two of four drives were gone from two nodes' view within 10-30 s). A long DNS outage therefore costs quorum even though every node is up. Recovery ~10 s after DNS returns. |
+| Half of the queries lost | A restarting node needs one extra restart cycle (~12 s); nothing else. The boxes have two resolvers in `resolv.conf`, which is much better than the single resolver of the test. |
+| Name repointed to a new, empty account (TTL 30 s) | Peers reach the new address within seconds, no restart of the others (the heal itself could not be judged in the test: its plain directories shared one filesystem, which the replacement admission refuses). |
+
+So the names add one dependency: the boxes must reach their resolvers. The unit's restart policy absorbs short outages; plan
+rolling restarts when DNS is healthy (a roll during a resolver outage just loops until it returns).
+
 **Application users (`playbooks/iam.yml`, `scripts/iam.py`).** One RustFS IAM user per bucket, never the cluster admin
 key for an application. For every entry of `iam_users` (a variable of your cluster group; secrets stay in sops) the
 playbook creates the bucket with a hard quota, adds the user, adds the canned policy `bucket-<bucket>` (`s3:*` on

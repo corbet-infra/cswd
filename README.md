@@ -165,6 +165,14 @@ is per bucket, so the sum over all buckets must stay below it.
 **Replacing a dead account.** A new account has an empty directory, and RustFS 1.0.3 does not heal it by itself:
 automatic replacement is only admitted for a drive that is its own mount point on a different device, which a
 directory never is (the escape hatch is `RUSTFS_UNSAFE_BYPASS_DISK_CHECK=true`; leave it off until you have tested it).
+Conflicting lab results: one lab run found no self-heal, a later 10-process lab on 1.0.3 healed an empty replacement drive
+by itself within 90 s (with and without `RUSTFS_UNSAFE_BYPASS_DISK_CHECK`). `playbooks/replace.yml` therefore waits for the
+self-heal first and starts the erasure-set heal from a survivor only if the slot is still out (prepared, **not yet run
+against a real replacement**; `scripts/replace.py` preflight and status were run read-only against a live cluster).
+**Endpoints by IP address:** a replacement account has another address. If `RUSTFS_VOLUMES` names the nodes by IP, the
+list changes and all other nodes need the new list and a rolling restart (the persisted layout checks counts and set width,
+and the slot is tied to the position in the list and the drive's UUID, but this was not tested). Name the nodes by host
+names from the start and repoint the name to the new account; each name must resolve on its own node to an address of a local interface.
 The procedure that matches the source and docs (check each step on a lab cluster first):
 
 1. Make sure the cluster is otherwise healthy (all other nodes ready; EC:2 survives two losses, not three).

@@ -10,7 +10,7 @@ installed outside the account's home directory.
 |---|---|
 | `facts` | Installs a tiny stdlib-Python agent and writes a JSON fact sheet per account (limits, cgroup, quota, ports, memory) |
 | `debloat` | Switches off the shop image's media stack, torrent clients and rootless Docker; stops leftovers by exact PID; reports what the provider restarts |
-| `harden` | Account modes, ONE restricted SSH key (`from=` + no forwarding), `umask 077`, "other" bits removed from our trees, listener audit, security fact sheet |
+| `harden` | Account modes, ONE restricted SSH key (no forwarding; `from=` only if you give a source list), `umask 077`, "other" bits removed from our trees, listener audit, security fact sheet |
 | `rustfs` | Pinned, checksummed RustFS binary, TLS leaf per node from your own CA, `systemd --user` unit, distributed mode over an inventory group, `/minio/health/ready` waits, rolling restarts |
 | `quotawatch` | Timer that records disk / file / RAM usage against the account's limits (and pushes it into the cluster) |
 
@@ -243,8 +243,7 @@ The procedure that matches the source and docs (check each step on a lab cluster
   (1.25 GiB RAM, ext4, directory as drive, shared HDD). Everything here was tested at small scale; re-test before bumping the pin.
 * A provider quota error is not understood by RustFS (see above); the bucket quota is the guard, not a replacement for watching `quotawatch`.
 * The agent and the playbooks assume Debian 12 userland (python3.11, systemd --user, `ss`, `screen`) and x86_64.
-* Connections use the SSH password only for the bootstrap; `harden` installs one key restricted by `from=`. If your
-  egress address changes the key stops working until you bootstrap again by password and update the list.
+* Connections use the SSH password only for the bootstrap; `harden` installs one key with the options of `harden_authorized_options`. `harden_ssh_from` is optional: an empty list means no `from=` (use that when your egress address is not yours to control; a `from=` list that misses the controller locks the key out and leaves the password login as the way back). `playbooks/sshkey.yml` rewrites only the key line, one account at a time, and proves a fresh key login.
 * `debloat` cannot switch off what the provider restarts as root (Docker is the example); it stops the processes and tells you.
 * Metrics are OTLP push only (no scrape endpoint); the roles do not set up a collector. Poll the health JSON instead.
 * The collection ships no mc / rc client; `scripts/s3check.py`, `scripts/bucket.py` and `scripts/iam.py` are stdlib SigV4 clients good enough for checks, quotas and application users.

@@ -157,6 +157,38 @@ did not keep the drive online. A raised timeout also keeps a very slow drive in 
 timeout. If a host stays this slow after that (disk 100 % busy, tens of seconds per probe), the account is the problem, not the settings: ask the provider for another
 host (a dead drive costs one of the two parity shards).
 
+**Running on dirt (`rustfs_dirt_tolerant`, `rustfs_durability_mode`).** "Dirt" is what shared seedbox hosts do: the disk is kept 100 % busy by
+other tenants (reads of 50-260 ms, writes of 150-700 ms, stalls of 20-30 s) and some accounts flap in and out. It was reproduced in a VM lab
+(ten RustFS 1.0.3 processes, 8+2, TLS, `dm-delay` latency, `dm-suspend` stalls, SIGKILL flaps, cold reads, a JuiceFS-like client with
+4 MiB blocks, 30 s response-header timeout, 11 tries per PUT; branch `lab/rustfs-dirt` of the lab repository). What it showed, with the
+settings of this role written today ("defaults") against the dirt bundle (3 repetitions, identical dirt):
+
+| | defaults | `rustfs_dirt_tolerant` + `rustfs_durability_mode: relaxed` |
+|---|---|---|
+| PUT attempts that failed (503, reset, timeout) | 53 % | 36 % |
+| single-try PUT with a 60 s timeout succeeds | 58 % | 89 % |
+| drive-faulty rejections / operation timeouts per 4 min | 29 / 14 | 0 / 0 |
+| PUT operations that exhaust 11 tries (EIO) | 3 of 60 | 3 of 80 |
+| one 4 MiB PUT, one client thread (strace) | 17-24 s | 6.5 s |
+
+* **Why a PUT is slow.** In RustFS's default `strict` durability one 4 MiB PUT is about eight dependent `fsync`s per drive (shard
+  `fdatasync`, `xl.meta`, rollback copy, every parent directory), so 10-17 s on a drive that needs 1.6 s per sync; the PUT is acknowledged when 8 of 10 drives
+  are done and seven drives are slow. `rustfs_durability_mode: relaxed` keeps the shard `fdatasync` and leaves `xl.meta` and the directory
+  entries to the page cache: a power loss of ONE node can lose its newest versions (the other nodes hold them; the unclean-shutdown heal repairs it); a killed process loses
+  nothing. Upstream wants independent power domains for it. It is a decision, hence a variable of its own and not part of the bundle.
+* **What the bundle sets** (`rustfs_dirt_env`, every key overridable per host through `rustfs_dirt_env_override`): a drive goes offline only after
+  1000 consecutive timeouts (default 2), probe and operation timeouts of 120-300 s instead of 5-30 s, RPC deadline 300 s, connect timeout 10 s, HTTP/2 keep-alive timeouts 60 s, lock
+  timeouts 20 s / 10 s, readiness not withdrawn after 30 s without a completed object stage. It makes RustFS wait for a slow drive instead of
+  dropping it, which with 8+2 matters because two more slow or flapping nodes already take the set below write quorum.
+* **What it does not fix.** With ten accounts and 8+2, three impaired nodes at the same moment (flapping or stalled) leave neither reads nor writes with quorum;
+  in the lab plan that was 12-20 % of the time. A client that gives up after 30 s per request (JuiceFS: hard-coded response-header timeout) and after
+  11 tries / 5 minutes still sees about 4 % of its PUT operations fail. Two ways out, both outside RustFS settings: JuiceFS `--writeback --max-uploads 2` (the application never sees a
+  PUT error; blocks wait minutes on the client disk) and more parity (`rustfs_storage_class_standard: "EC:4"`, 6+4, 60 % usable; applies to new objects only).
+* **Never enable** `RUSTFS_GET_LOCKSTEP_DATA_SHARDS_ONLY_ENABLE` (1.0.3: permanent HTTP 500 on objects that have exactly 8 live shards), nor
+  `RUSTFS_OBJECT_DISK_WRITE_STALL_TIMEOUT=0` (waits for all ten drives forever) nor `RUSTFS_DRIVE_ACTIVE_MONITORING=false` (nothing re-admits a drive).
+* **Caveats.** Hung or black-holed peers are tried on every operation with the bundle (10 s connect timeout each); a killed process is refused instantly. The lab has no queueing
+  at the disk and uses one noisy host; read the table as direction and size, not as a promise.
+
 **Endpoints by DNS name: what happens when DNS misbehaves** (`rustfs_cluster_domain`; RustFS 1.0.3, measured with four nodes in
 private network namespaces on the playground box, a controllable DNS server, `Restart=always RestartSec=10` emulated; the
 resolver of the static musl binary has no cache and honours `/etc/resolv.conf` only):
@@ -223,6 +255,7 @@ The procedure that matches the source and docs (check each step on a lab cluster
 ## Tests
 
 * `tests/fixture/test-own-procs.sh` - the PID-exact process stopper.
+* `tests/fixture/test-envfile.py` - renders the RustFS env file template with plain jinja2 and checks the dirt bundle, its overrides and the durability switch.
 * `tests/fixture/test-inventory.sh` - lookup and inventory plugin end to end with a throw-away age key.
 * `tools/leak-scan.sh [patterns]` - run before every push of this public repository.
 

@@ -110,8 +110,12 @@ quota** (hard, byte based) at about 80 percent of the data capacity: 8+2 of ten 
 capacity, so about 5.8 TiB (`playbooks/bucket.yml`, `scripts/bucket.py`). Bucket quota rejects PUTs with
 `InvalidRequest: Bucket quota exceeded` (tested: 8 MiB quota accepts 2 x 3 MiB, refuses the third). A fresh bucket with a
 quota answers 503 "authoritative bucket usage is not available yet" until the scanner's leader has finished a full cycle: about a
-minute on a quiet single node, but about an hour on ten saturated shared disks (16 cycles in 17 hours, `GET /rustfs/admin/v3/scanner/status`
-on the node whose `cycle_schedule.execution_role` is `leader`). Create quota'd buckets well before clients connect. **On our cluster the usage never became available**: five hours after the bucket was\ncreated every node still answered 503, although the scanner leader completed cycles (16 recorded, the leader role moves between nodes) and\nthe cluster ran with one drive out all that time (the usage may only count as authoritative from a complete scan). A quota'd bucket that\nis not writable is worse than none, so `iam.py --quota-bytes 0` / `quota_bytes: 0` clears the quota (`DELETE /rustfs/admin/v3/quota/<bucket>`);\nthe bucket quota as the provider-quota guard is NOT in force until a quota'd test bucket becomes writable on a 10-of-10 cluster.
+minute on a quiet single node, but much longer on ten saturated shared disks (see below; `GET /rustfs/admin/v3/scanner/status`
+on the node whose `cycle_schedule.execution_role` is `leader`). Create quota'd buckets well before clients connect. **On our cluster the usage never became available**: five hours after the bucket was
+created every node still answered 503, although the scanner leader completed cycles (16 recorded, the leader role moves between nodes) and
+the cluster ran with one drive out all that time (the usage may only count as authoritative from a complete scan). A quota'd bucket that
+is not writable is worse than none, so `iam.py --quota-bytes 0` / `quota_bytes: 0` clears the quota (`DELETE /rustfs/admin/v3/quota/<bucket>`);
+the bucket quota as the provider-quota guard is NOT in force until a quota'd test bucket becomes writable on a 10-of-10 cluster.
 Watch the per-account quota with `quotawatch` (`~/cold/status/quota.json`, also pushed into the cluster).
 
 **A node that stalls on a saturated host (`rustfs_binary_in_ram`).** The shop hosts are shared with other tenants whose

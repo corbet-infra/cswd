@@ -160,7 +160,7 @@ host (a dead drive costs one of the two parity shards).
 **Running on dirt (`rustfs_dirt_tolerant`, `rustfs_durability_mode`).** "Dirt" is what shared seedbox hosts do: the disk is kept 100 % busy by
 other tenants (reads of 50-260 ms, writes of 150-700 ms, stalls of 20-30 s) and some accounts flap in and out. It was reproduced in a VM lab
 (ten RustFS 1.0.3 processes, 8+2, TLS, `dm-delay` latency, `dm-suspend` stalls, SIGKILL flaps, cold reads, a JuiceFS-like client with
-4 MiB blocks, 30 s response-header timeout, 11 tries per PUT; branch `lab/rustfs-dirt` of the lab repository). What it showed, with the
+4 MiB blocks, 30 s response-header timeout, 11 tries per PUT). What it showed, with the
 settings of this role written today ("defaults") against the dirt bundle (3 repetitions, identical dirt):
 
 | | defaults | `rustfs_dirt_tolerant` + `rustfs_durability_mode: relaxed` |

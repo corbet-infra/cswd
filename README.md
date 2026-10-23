@@ -84,6 +84,7 @@ at a time with a readiness wait in between.
 | `RUSTFS_DRIVE_TIMEOUT_PROFILE` | `high_latency` | A busy shared HDD can exceed the 5 s drive-liveness budget. |
 | `RUSTFS_SCANNER_SPEED`, object data cache | `slow`, off | Scanner shares two cores and a shared disk; the body cache costs RAM and cannot help 4 MiB blocks. |
 | `RUSTFS_OBS_LOG_MAX_TOTAL_SIZE_BYTES`, `RUSTFS_CHECK_UPDATE` | 256 MiB, false | Logs count against the disk quota; no phone-home. |
+| `rustfs_binary_in_ram` (off by default) | binary runs from `/run/user/<uid>/crfs` (private tmpfs) | See "A node that stalls on a saturated host" below. Costs about 263 MiB of the account's RAM cap. |
 | Unit | `Type=notify`, `Restart=always`, `RestartSec=10`, `TimeoutStopSec=30` | RustFS can abort under cancellation bursts; it must come back by itself. |
 
 Every one of them is a role variable (`rustfs_*`), plus `rustfs_server_env_extra` for anything else. After the first
@@ -108,8 +109,50 @@ and a provider quota error (EDQUOT) is not mapped to "disk full" (it may look li
 quota** (hard, byte based) at about 80 percent of the data capacity: 8+2 of ten 910 GiB accounts = 7280 GiB of data
 capacity, so about 5.8 TiB (`playbooks/bucket.yml`, `scripts/bucket.py`). Bucket quota rejects PUTs with
 `InvalidRequest: Bucket quota exceeded` (tested: 8 MiB quota accepts 2 x 3 MiB, refuses the third). A fresh bucket with a
-quota answers 503 "authoritative bucket usage is not available yet" for about a minute: set it up before clients connect.
+quota answers 503 "authoritative bucket usage is not available yet" until the scanner's leader has finished a full cycle: about a
+minute on a quiet single node, but about an hour on ten saturated shared disks (16 cycles in 17 hours, `GET /rustfs/admin/v3/scanner/status`
+on the node whose `cycle_schedule.execution_role` is `leader`). Create quota'd buckets well before clients connect.
 Watch the per-account quota with `quotawatch` (`~/cold/status/quota.json`, also pushed into the cluster).
+
+**A node that stalls on a saturated host (`rustfs_binary_in_ram`).** The shop hosts are shared with other tenants whose
+reads saturate the disk queue and the page cache. The RustFS binary is a 263 MiB static executable that is *mapped*, not
+read; every page fault pulls a read-around window from the disk (the hosts use `read_ahead_kb=4096`, about 1.3 MB per
+fault on average). On two of our ten hosts the kernel kept evicting the text pages, so the two async workers sat in D
+state on `blk_mq_get_tag` (`/proc/<pid>/task/*/wchan`) re-reading the binary: 44 GB read in 14 hours by a node whose data
+directory held 1.2 MB, only ~50 `read()` syscalls (`rchar`), 33 000 major faults; the other eight hosts read about nothing.
+Symptoms: TLS handshakes of 3 to 30 s (healthy: 0.1 s), `RemoteClientUnavailable: internode channel acquisition deadline
+elapsed` and `storage format quorum not reached` in the node's own log, peers marking the drive suspect/faulty, and a
+restart loop while the unit waits for quorum. It is **not** a configuration problem: environment, certificate (SANs
+checked with `openssl s_client -verify_ip`), endpoint list and port were identical to the healthy nodes, and endpoints
+given as IP addresses are "local" without any name resolution. How to recognise it: per node
+`awk '/read_bytes/{print $2}' /proc/<pid>/io` against `awk '{print $12}' /proc/<pid>/stat` (major faults) and
+`/proc/pressure/io`. The fix is to take the disk out of the code path: `rustfs_binary_in_ram: true` makes the unit copy the
+binary to the account's private tmpfs (`ExecStartPre=install -D -m 0700`, mode 0700 directory, never `/dev/shm`, which
+other tenants can pre-create) and run it from there. Measured on the playground box under the same kind of load: cold
+start from disk 10 to 12 s and 183 MB read, from tmpfs 0.6 to 2.4 s and 0 bytes, no major faults, steady state
+identical; kill -9 and restart come back from tmpfs. Set it per host (a host variable) only where the symptom shows up.
+Other levers that did not show a steady-state difference in the same test and are not enabled:
+`RUSTFS_RUNTIME_WORKER_THREADS` above the CPU override.
+
+**A node whose own drive keeps dropping out.** Symptom: every node lists the same drive in
+`details.storage.unavailableDrives` (`runtimeState: offline`, `hostOnline: true`), and the node's own log says
+`Disk health check timed out` followed by `Disk health check rejected operation because disk is marked faulty`. RustFS probes
+every drive (write, read and delete of a test object, every 15 s, timeout 5 s) and marks it suspect, then offline, when
+probes time out; the `high_latency` profile does not raise that probe timeout. On a disk that other tenants keep 100 % busy
+(`/proc/diskstats`: busy 100 %, 170-280 ms per read and 280-700 ms per write, against 14 ms and 44 % on a healthy host) a
+probe exceeds 5 s now and then and the drive leaves the set for minutes. `rustfs_drive_active_check_timeout_secs: 60` (off by default) sets
+`RUSTFS_DRIVE_ACTIVE_CHECK_TIMEOUT_SECS` to the profile's own budget. A restart brings the drive back until the next
+timeout. If a host stays this slow after that, the account is the problem, not the settings: ask the provider for another
+host (a dead drive costs one of the two parity shards).
+
+**Application users (`playbooks/iam.yml`, `scripts/iam.py`).** One RustFS IAM user per bucket, never the cluster admin
+key for an application. For every entry of `iam_users` (a variable of your cluster group; secrets stay in sops) the
+playbook creates the bucket with a hard quota, adds the user, adds the canned policy `bucket-<bucket>` (`s3:*` on
+`arn:aws:s3:::<bucket>` and `<bucket>/*`, nothing else) and attaches it; it then proves the pattern as that user: PUT, GET
+and DELETE in its own bucket work, a PUT into another bucket is refused with 403, the bucket listing shows only its own.
+Plain JSON admin API (`add-user`, `add-canned-policy`, `idp/builtin/policy/attach`), idempotent.
+The default quota of every bucket is `iam_default_quota_bytes` (80 percent of the 8+2 data capacity, see above); the quota
+is per bucket, so the sum over all buckets must stay below it.
 
 **Replacing a dead account.** A new account has an empty directory, and RustFS 1.0.3 does not heal it by itself:
 automatic replacement is only admitted for a drive that is its own mount point on a different device, which a
@@ -137,7 +180,8 @@ The procedure that matches the source and docs (check each step on a lab cluster
   egress address changes the key stops working until you bootstrap again by password and update the list.
 * `debloat` cannot switch off what the provider restarts as root (Docker is the example); it stops the processes and tells you.
 * Metrics are OTLP push only (no scrape endpoint); the roles do not set up a collector. Poll the health JSON instead.
-* The collection ships no mc / rc client; `scripts/s3check.py` and `scripts/bucket.py` are stdlib SigV4 clients good enough for checks and quotas.
+* The collection ships no mc / rc client; `scripts/s3check.py`, `scripts/bucket.py` and `scripts/iam.py` are stdlib SigV4 clients good enough for checks, quotas and application users.
+* On a saturated host every process of the account is slow, not only RustFS (SSH logins and Ansible tasks take minutes); a restart of such a node can take up to ten minutes to become ready.
 * Scanner and heal have open upstream issues (single-object auto-heal concurrency, scanner recovery after a peer restart): check
   scanner status after each roll.
 

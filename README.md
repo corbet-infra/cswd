@@ -131,8 +131,14 @@ binary to the account's private tmpfs (`ExecStartPre=install -D -m 0700`, mode 0
 other tenants can pre-create) and run it from there. Measured on the playground box under the same kind of load: cold
 start from disk 10 to 12 s and 183 MB read, from tmpfs 0.6 to 2.4 s and 0 bytes, no major faults, steady state
 identical; kill -9 and restart come back from tmpfs. Set it per host (a host variable) only where the symptom shows up.
-Other levers that did not show a steady-state difference in the same test and are not enabled:
-`RUSTFS_RUNTIME_WORKER_THREADS` above the CPU override.
+The copy is made at every start and checked against `rustfs_binary_sha256` (the pinned hash of the unpacked binary of
+`rustfs_version`, written to `~/cold/etc/rustfs.sha256`): `ExecStartPre=sha256sum -c` fails the start on a mismatch (tested
+by corrupting the pin: the unit stays down). The release binary is already stripped (203 MiB of code, 19 MiB rodata, no
+debug sections), so there is nothing to shrink. Memory: the tmpfs copy is charged to the account's memory cgroup
+(`memory.stat` `shmem`, 266 MiB). Under 64 parallel 4 MiB PUT+GET the node's RSS peaked at 483 MiB, so node plus copy is
+about 750 MiB of the 1250 MiB cap before the other things of the account (shop panel, provider Docker); the page cache is
+reclaimable. `RUSTFS_RUNTIME_WORKER_THREADS` above the CPU override did not change anything in a steady-state test and the
+stall cannot be reproduced on a healthy host, so it is not set.
 
 **A node whose own drive keeps dropping out.** Symptom: every node lists the same drive in
 `details.storage.unavailableDrives` (`runtimeState: offline`, `hostOnline: true`), and the node's own log says
@@ -140,9 +146,11 @@ Other levers that did not show a steady-state difference in the same test and ar
 every drive (write, read and delete of a test object, every 15 s, timeout 5 s) and marks it suspect, then offline, when
 probes time out; the `high_latency` profile does not raise that probe timeout. On a disk that other tenants keep 100 % busy
 (`/proc/diskstats`: busy 100 %, 170-280 ms per read and 280-700 ms per write, against 14 ms and 44 % on a healthy host) a
-probe exceeds 5 s now and then and the drive leaves the set for minutes. `rustfs_drive_active_check_timeout_secs: 60` (off by default) sets
-`RUSTFS_DRIVE_ACTIVE_CHECK_TIMEOUT_SECS` to the profile's own budget. A restart brings the drive back until the next
-timeout. If a host stays this slow after that, the account is the problem, not the settings: ask the provider for another
+probe exceeds 5 s now and then and the drive leaves the set for minutes. `rustfs_drive_active_check_timeout_secs: 30` (off by default) sets
+`RUSTFS_DRIVE_ACTIVE_CHECK_TIMEOUT_SECS`. It helps against stalls of a few seconds only: on a host whose disk stalled for
+more than 30 s (log: `Disk health check timed out ... timeout_secs: 30`, `operation still pending 17955 ms`) a 30 s probe timeout
+did not keep the drive online. A raised timeout also keeps a very slow drive in the set, where it can slow writes down. A restart brings the drive back until the next
+timeout. If a host stays this slow after that (disk 100 % busy, tens of seconds per probe), the account is the problem, not the settings: ask the provider for another
 host (a dead drive costs one of the two parity shards).
 
 **Application users (`playbooks/iam.yml`, `scripts/iam.py`).** One RustFS IAM user per bucket, never the cluster admin

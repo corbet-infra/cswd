@@ -237,6 +237,16 @@ The procedure that matches the source and docs (check each step on a lab cluster
    account takes hours to a day. Verify physically that shards exist on the new drive; a readable object proves nothing.
 7. Only then take the next node through maintenance.
 
+### Wedge watchdog (`rustfs_hostwatch`)
+
+On a saturated shared host a node can wedge: the TCP port accepts, but the process never completes a TLS handshake. Peers and the balancer then hang on it until their timeouts instead of getting an instant refusal, which is worse than a dead node. `crfs-hostwatch` is an optional user unit (python3 standard library only) beside the RustFS unit:
+
+- it probes the node's own TLS endpoint; when the probe fails for `wedge_seconds` (10) in a row it kills the process and keeps it down (fence file);
+- the RustFS unit has an `ExecStartPre` gate, so `Restart=always` cannot restart it into the saturated disk; the node is re-admitted after `healthy_probes` (6) consecutive fast disk probes (a repeat of one PUT's sync chain, `healthy_disk_s` 2.0), with a doubling fence time if it wedges again soon;
+- optionally it answers HAProxy's `agent-check` (`rustfs_hostwatch_agent_port`) with `up 100%`, `up 40%`, `drain` or `down`.
+
+Enable with `rustfs_hostwatch: true`; options as a map in `rustfs_hostwatch_options` (names of `crfs-hostwatch.py --help` with underscores). In the lab it is a safety net: with the dirt bundle, relaxed durability, early acknowledgement off and 8 worker threads it never fired and changed nothing measurable. Tests: `tests/fixture/test-hostwatch.py` (state machine) and the env-file render test.
+
 ## Limits and known issues
 
 * RustFS is young software (1.0.0 is from September 2026) and this deployment is far outside its documented envelope

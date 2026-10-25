@@ -1,0 +1,26 @@
+# {{ ansible_managed | default('managed by corbet.crfs.seaweedfs_volume') }}
+# Mutual TLS on gRPC (master <-> volume <-> filer) and HTTPS on the volume server with client certificates, all from the cluster CA.
+[jwt.signing]
+key = ""
+
+[grpc]
+ca = "{{ seaweed_tls_dir }}/ca.pem"
+
+[grpc.volume]
+cert = "{{ seaweed_tls_dir }}/cert.pem"
+key = "{{ seaweed_tls_dir }}/key.pem"
+
+[grpc.client]
+cert = "{{ seaweed_tls_dir }}/cert.pem"
+key = "{{ seaweed_tls_dir }}/key.pem"
+
+[https.volume]
+cert = "{{ seaweed_tls_dir }}/cert.pem"
+key = "{{ seaweed_tls_dir }}/key.pem"
+ca = "{{ seaweed_tls_dir }}/ca.pem"
+
+[https.client]
+enabled = true
+cert = "{{ seaweed_tls_dir }}/cert.pem"
+key = "{{ seaweed_tls_dir }}/key.pem"
+ca = "{{ seaweed_tls_dir }}/ca.pem"

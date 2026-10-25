@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# Installs and configures `weed volume` on one box. Starting is a separate switch (seaweedfs_volume_start).
+- name: Learn the account (user directory, uid)
+  ansible.builtin.setup:
+    gather_subset: [min]
+    filter: ansible_user_*
+  when: ansible_facts['user_dir'] is not defined
+
+- name: Required settings
+  ansible.builtin.assert:
+    that:
+      - seaweed_master | length > 0
+      - seaweed_grpc_port | int > 0
+    fail_msg: "seaweed_master and a host variable seaweed_grpc_port (an assigned, unused port) must be set"
+    quiet: true
+
+- name: Directories (private)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ seaweed_base_dir }}"
+    - "{{ seaweed_bin_dir }}"
+    - "{{ seaweed_base_dir }}/dl"
+    - "{{ seaweed_tls_dir }}"
+    - "{{ seaweed_data_dir }}"
+    - "{{ seaweed_log_dir }}"
+    - "{{ ansible_facts['user_dir'] }}/.seaweedfs"
+    - "{{ ansible_facts['user_dir'] }}/.config/systemd/user"
+
+- name: Leaf certificate from the cluster CA (the rustfs role's tls tasks; key made on the box)
+  ansible.builtin.include_role:
+    name: corbet.crfs.rustfs
+    tasks_from: tls.yml
+  vars:
+    rustfs_tls_names: "{{ seaweed_tls_names }}"
+    rustfs_tls_ips: "{{ seaweed_tls_ips }}"
+
+- name: Binary present
+  ansible.builtin.stat:
+    path: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed"
+  register: seaweed_bin_stat
+
+- name: Download the pinned release (sha256 checked by the module)
+  ansible.builtin.get_url:
+    url: "{{ seaweed_download_url }}"
+    dest: "{{ seaweed_base_dir }}/dl/weed-{{ seaweed_version }}.tar.gz"
+    checksum: "sha256:{{ seaweed_sha256 }}"
+    mode: "0600"
+  when: not seaweed_bin_stat.stat.exists
+
+- name: Directory of this version
+  ansible.builtin.file:
+    path: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}"
+    state: directory
+    mode: "0700"
+
+- name: Unpack
+  ansible.builtin.unarchive:
+    src: "{{ seaweed_base_dir }}/dl/weed-{{ seaweed_version }}.tar.gz"
+    dest: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}"
+    remote_src: true
+    creates: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed"
+  when: not seaweed_bin_stat.stat.exists and not ansible_check_mode
+
+- name: Archive no longer needed (it counts against the file quota and the disk)
+  ansible.builtin.file:
+    path: "{{ seaweed_base_dir }}/dl/weed-{{ seaweed_version }}.tar.gz"
+    state: absent
+
+- name: security.toml
+  ansible.builtin.template:
+    src: security.toml.j2
+    dest: "{{ ansible_facts['user_dir'] }}/.seaweedfs/security.toml"
+    mode: "0600"
+  register: seaweed_sec
+
+- name: Unit
+  ansible.builtin.template:
+    src: seaweed-volume.service.j2
+    dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/seaweed-volume.service"
+    mode: "0600"
+  register: seaweed_unit
+
+- name: Reload, enable and (on request) start
+  ansible.builtin.systemd_service:
+    name: seaweed-volume.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ ('restarted' if (seaweed_unit.changed or seaweed_sec.changed) else 'started') if seaweedfs_volume_start else omit }}"
+    scope: user
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"

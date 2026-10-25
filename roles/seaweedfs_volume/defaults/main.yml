@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# `weed volume` on one box. Packed volume files: a box holds a few hundred files however many objects it stores, which is the point
+# against the provider's file quota (soft limit 500 files per GiB, every file counts). The master, the filer and the S3 gateway run
+# elsewhere (Frankfurt); this role only installs and configures the volume server and does not start it (seaweedfs_volume_start does).
+seaweed_version: "4.50"
+seaweed_download_url: "https://github.com/seaweedfs/seaweedfs/releases/download/{{ seaweed_version }}/linux_amd64.tar.gz"
+seaweed_sha256: "8fc88061421a74d1cd486d1cd9dc5874d6495f9ed17fed8fa677bb16bd195b07"
+seaweed_base_dir: "{{ ansible_facts['user_dir'] }}/cold"
+seaweed_bin_dir: "{{ seaweed_base_dir }}/bin"
+seaweed_data_dir: "{{ seaweed_base_dir }}/data/seaweed"
+seaweed_log_dir: "{{ seaweed_base_dir }}/log"
+seaweed_tls_dir: "{{ seaweed_base_dir }}/tls"             # key.pem, cert.pem, ca.pem (issued by the rustfs role's tls tasks)
+
+# Ports must be ones the provider assigned to the account (facts: ports.assigned_files); nothing else is reachable.
+seaweed_http_port: "{{ rustfs_server_port }}"            # HTTPS of the volume server (the account's own S3 port, free once RustFS is gone)
+seaweed_grpc_port: 0                                     # host variable, an unused assigned port; 0 stops the play
+seaweed_public_ip: "{{ ansible_host }}"
+seaweed_master: ""                                       # host:httpPort of the master; its gRPC port is httpPort + 10000
+seaweed_data_center: hel
+seaweed_rack: "{{ inventory_hostname }}"                 # one rack per box: replication 010 = two copies on different racks
+seaweed_max_volumes: 40
+seaweed_min_free_space: 5GiB
+seaweed_index: memory                                    # one .idx file per volume (leveldb would add a directory of files each)
+seaweed_compaction_mbps: 10
+seaweed_idle_timeout: 60
+seaweed_tls_names: ["{{ crfs_label | default(inventory_hostname) }}", "{{ inventory_hostname }}.s3.hel.pmd.corbet.ch", localhost]
+seaweed_tls_ips: ["{{ ansible_host }}", "127.0.0.1"]
+seaweedfs_volume_start: false

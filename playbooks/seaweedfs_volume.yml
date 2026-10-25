@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# SeaweedFS volume servers on the boxes: -e target=<host|group> [-e seaweed_master=host:port] [-e seaweedfs_volume_start=true]
+- name: SeaweedFS volume server
+  hosts: "{{ target | mandatory }}"
+  gather_facts: false
+  serial: "{{ service_serial | default(1) }}"
+  roles:
+    - role: corbet.crfs.seaweedfs_volume

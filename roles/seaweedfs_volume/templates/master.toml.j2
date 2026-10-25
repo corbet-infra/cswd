@@ -1,0 +1,17 @@
+# managed by corbet.crfs.seaweedfs_volume. No EC (the free version is a fixed 10+4 and needs 14 servers): replication repair, balance,
+# empty-volume removal and upload cleanup only. Vacuum is the master's own periodic job (-garbageThreshold).
+[master.maintenance]
+scripts = """
+  lock
+  volume.deleteEmpty -quietFor=24h -apply
+  volume.balance -apply
+  volume.fix.replication -apply
+  s3.clean.uploads -timeAgo=24h
+  unlock
+"""
+sleep_minutes = 17
+[master.volume_growth]
+copy_1 = 2
+copy_2 = 2
+copy_3 = 1
+copy_other = 1

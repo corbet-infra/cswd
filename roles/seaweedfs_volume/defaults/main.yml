@@ -27,3 +27,11 @@ seaweed_idle_timeout: 60
 seaweed_tls_names: ["{{ crfs_label | default(inventory_hostname) }}", "{{ inventory_hostname }}.s3.hel.pmd.corbet.ch", localhost]
 seaweed_tls_ips: ["{{ ansible_host }}", "127.0.0.1"]
 seaweedfs_volume_start: false
+
+# Optional master on this box (trial: one master on cld-4; production would be a raft of three on three boxes). Two more assigned ports.
+seaweed_master_enable: false
+seaweed_master_http_port: 0
+seaweed_master_grpc_port: 0
+seaweed_master_peers: ""            # empty = single master
+seaweed_volume_size_limit_mb: 1024
+seaweed_default_replication: "010"  # two copies on different racks

@@ -39,7 +39,19 @@ return 503). `/minio/health/ready` flips only when the node can serve. All waits
 * Erasure set: 10 drives, `RUSTFS_STORAGE_CLASS_STANDARD=EC:2` -> 8 data + 2 parity shards. Any 2 accounts may be down;
   reads and writes keep working (verified in a 4-node EC:2 test: 1 and 2 nodes stopped, objects still read, one write
   accepted with 1 node down).
-* Usable space = 8/10 of the raw: with ten accounts of 910 GiB that is about 7.1 TiB (keep headroom: the quota is soft).
+* Disk space alone would give 8/10 of the raw: ten accounts of 910 GiB = about 7.1 TiB. **In practice the file quota
+  is the limit, not the disk space** (next paragraph).
+* **File-limit arithmetic.** The provider's file quota is 500 files per GiB of disk quota plus a 25 % burst
+  ([knowledge base article](https://pulsedmedia.com/clients/knowledgebase.php?action=displayarticle&id=113)). With 8+2 every
+  account holds a piece of EVERY object, and RustFS uses about 3.7 files and directories per object per drive (measured
+  2026-10-25: 446 objects = 1,632 entries; small objects stored inline in `xl.meta` use fewer). About 76k files are already
+  taken by the account's own platform files (measured 2026-10-25 on one 1 TB account). So:
+
+  `max objects = (disk_quota_GiB x 500 x (1 or 1.25) - platform_files) / 3.7`
+
+  `quota -s` over SSH shows your own quota and usage. With 1 TB accounts (455k files, 569k with the burst) that is roughly
+  100k-130k objects, i.e. about 1.7 TiB at 16 MiB objects and less with smaller objects. Adding accounts to the same erasure
+  set does not raise the limit (each account holds every object); more erasure sets or larger accounts do.
 * RAM per node: roughly 100-150 MiB RSS idle; in a simulated 8+2 cluster under load about 450 MiB RSS and about 640 MiB
   peak for the whole account cgroup, which fits the 1250 MiB cap only after the debloat step.
 * Each object write fans out to all ten accounts: the cluster's egress and ingress are Internet traffic of the
@@ -90,6 +102,25 @@ at a time with a readiness wait in between.
 Every one of them is a role variable (`rustfs_*`), plus `rustfs_server_env_extra` for anything else. After the first
 bring-up **verify 8+2**: `check_expect_drives=<n> check_expect_parity=2` in the `check` playbook (reads
 `/rustfs/admin/v3/info`), or `rc admin info cluster`.
+
+## Suitable for
+
+Large objects that are written once and read rarely, where a reader can wait: backups, archives, media originals behind a
+cache. Not suitable for many small objects (file quota), databases, or interactive reads of uncached data (see Disk I/O priority).
+
+## Disk I/O priority
+
+Storage accounts sit in the low disk-priority band (the plan shows e.g. "Archive (5)"). The host's BFQ scheduler shares disk
+time by a per-account weight (`blkio.bfq.weight` of the user slice under `/sys/fs/cgroup/blkio/user.slice/`). Priority only
+matters while the host's disks are busy; otherwise the account gets full speed. Measured on a ten-box cluster (2026-10-24/25):
+
+* Through a client, 70-90 % of PUTs and 71-98 % of GETs succeeded on the first try; a 16 MiB PUT took 8-127 s.
+* A write stalls in the `rename_data` commit stage while it waits for write quorum (8 of 10) when two or three hosts are busy.
+* I/O pressure reached 97 % on a busy host; CPU pressure was 7-15 %, so CPU is not the bottleneck.
+* The provider sells a higher disk-priority extra (see Upgrade Options in the shop).
+
+Clients need long timeouts and retries; example for JuiceFS: `--io-retries 20 --get-timeout 300` with the writeback cache. The bundled
+functional check uses a 20 s timeout, so it can fail on a busy cluster while the data is fine.
 
 ## Operating it
 
@@ -157,11 +188,11 @@ did not keep the drive online. A raised timeout also keeps a very slow drive in 
 timeout. If a host stays this slow after that (disk 100 % busy, tens of seconds per probe), the account is the problem, not the settings: ask the provider for another
 host (a dead drive costs one of the two parity shards).
 
-**Running on dirt (`rustfs_dirt_tolerant`, `rustfs_durability_mode`).** "Dirt" is what shared seedbox hosts do: the disk is kept 100 % busy by
+**Running on busy shared disks (`rustfs_dirt_tolerant`, `rustfs_durability_mode`).** On shared seedbox hosts the disk can be kept 100 % busy by
 other tenants (reads of 50-260 ms, writes of 150-700 ms, stalls of 20-30 s) and some accounts flap in and out. It was reproduced in a VM lab
 (ten RustFS 1.0.3 processes, 8+2, TLS, `dm-delay` latency, `dm-suspend` stalls, SIGKILL flaps, cold reads, a JuiceFS-like client with
 4 MiB blocks, 30 s response-header timeout, 11 tries per PUT). What it showed, with the
-settings of this role written today ("defaults") against the dirt bundle (3 repetitions, identical dirt):
+settings of this role written today ("defaults") against the tolerance bundle (3 repetitions, identical load):
 
 | | defaults | `rustfs_dirt_tolerant` + `rustfs_durability_mode: relaxed` |
 |---|---|---|
@@ -176,7 +207,7 @@ settings of this role written today ("defaults") against the dirt bundle (3 repe
   are done and seven drives are slow. `rustfs_durability_mode: relaxed` keeps the shard `fdatasync` and leaves `xl.meta` and the directory
   entries to the page cache: a power loss of ONE node can lose its newest versions (the other nodes hold them; the unclean-shutdown heal repairs it); a killed process loses
   nothing. Upstream wants independent power domains for it. It is a decision, hence a variable of its own and not part of the bundle.
-* **What the bundle sets** (`rustfs_dirt_env`, every key overridable per host through `rustfs_dirt_env_override`): a drive goes offline only after
+* **What the bundle sets** (`rustfs_dirt_env`, the variable names keep their historical prefix; every key overridable per host through `rustfs_dirt_env_override`): a drive goes offline only after
   1000 consecutive timeouts (default 2), probe and operation timeouts of 120-300 s instead of 5-30 s, RPC deadline 300 s, connect timeout 10 s, HTTP/2 keep-alive timeouts 60 s, lock
   timeouts 20 s / 10 s, readiness not withdrawn after 30 s without a completed object stage. It makes RustFS wait for a slow drive instead of
   dropping it, which with 8+2 matters because two more slow or flapping nodes already take the set below write quorum.
@@ -245,7 +276,17 @@ On a saturated shared host a node can wedge: the TCP port accepts, but the proce
 - the RustFS unit has an `ExecStartPre` gate, so `Restart=always` cannot restart it into the saturated disk; the node is re-admitted after `healthy_probes` (6) consecutive fast disk probes (a repeat of one PUT's sync chain, `healthy_disk_s` 2.0), with a doubling fence time if it wedges again soon;
 - optionally it answers HAProxy's `agent-check` (`rustfs_hostwatch_agent_port`) with `up 100%`, `up 40%`, `drain` or `down`.
 
-Enable with `rustfs_hostwatch: true`; options as a map in `rustfs_hostwatch_options` (names of `crfs-hostwatch.py --help` with underscores). In the lab it is a safety net: with the dirt bundle, relaxed durability, early acknowledgement off and 8 worker threads it never fired and changed nothing measurable. Tests: `tests/fixture/test-hostwatch.py` (state machine) and the env-file render test.
+Enable with `rustfs_hostwatch: true`; options as a map in `rustfs_hostwatch_options` (names of `crfs-hostwatch.py --help` with underscores). In the lab it is a safety net: with the tolerance bundle, relaxed durability, early acknowledgement off and 8 worker threads it never fired and changed nothing measurable. 
+**Event log.** With `--event-log` (the role sets `~/.local/state/crfs/hostwatch-events.log`) every decision and every change of the RustFS unit is appended as one line: an ISO-8601 timestamp with time zone, then the message. Messages are the decisions (`WEDGE: ...`, `re-admit: ...`), failed commands or steps, and `unit: ...` lines carrying systemd's own view of the RustFS unit (InvocationID, ActiveState, Result, ExecMainStatus, NRestarts) plus the status JSON, so the exit reason survives a restart. The file is size-capped: at `--event-log-max` bytes (default 1,000,000) it is rotated to `hostwatch-events.log.1`, one generation kept. Per-cycle status lines are not persisted. Example of why a node was fenced and when it came back:
+
+```
+2026-10-25T14:02:11+0000 WEDGE: TLS probe failing for 41 s (disk probe 3.0 s): fencing for at least 60 s
+2026-10-25T14:09:40+0000 re-admit: disk probes fast (420 ms), starting the node
+```
+
+Read it as: the node's TLS endpoint did not answer for 41 s while a disk probe took 3 s, so the watcher fenced the node; it was started again once the disk probes were fast again.
+
+Tests: `tests/fixture/test-hostwatch.py` (state machine) and the env-file render test.
 
 ## Limits and known issues
 
@@ -264,7 +305,7 @@ Enable with `rustfs_hostwatch: true`; options as a map in `rustfs_hostwatch_opti
 ## Tests
 
 * `tests/fixture/test-own-procs.sh` - the PID-exact process stopper.
-* `tests/fixture/test-envfile.py` - renders the RustFS env file template with plain jinja2 and checks the dirt bundle, its overrides and the durability switch.
+* `tests/fixture/test-envfile.py` - renders the RustFS env file template with plain jinja2 and checks the tolerance bundle, its overrides and the durability switch.
 * `tests/fixture/test-inventory.sh` - lookup and inventory plugin end to end with a throw-away age key.
 * `tools/leak-scan.sh [patterns]` - run before every push of this public repository.
 

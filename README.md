@@ -188,13 +188,13 @@ did not keep the drive online. A raised timeout also keeps a very slow drive in 
 timeout. If a host stays this slow after that (disk 100 % busy, tens of seconds per probe), the account is the problem, not the settings: ask the provider for another
 host (a dead drive costs one of the two parity shards).
 
-**Running on busy shared disks (`rustfs_dirt_tolerant`, `rustfs_durability_mode`).** On shared seedbox hosts the disk can be kept 100 % busy by
+**Running on busy shared disks (`rustfs_tolerance_tolerant`, `rustfs_durability_mode`).** On shared seedbox hosts the disk can be kept 100 % busy by
 other tenants (reads of 50-260 ms, writes of 150-700 ms, stalls of 20-30 s) and some accounts flap in and out. It was reproduced in a VM lab
 (ten RustFS 1.0.3 processes, 8+2, TLS, `dm-delay` latency, `dm-suspend` stalls, SIGKILL flaps, cold reads, a JuiceFS-like client with
 4 MiB blocks, 30 s response-header timeout, 11 tries per PUT). What it showed, with the
 settings of this role written today ("defaults") against the tolerance bundle (3 repetitions, identical load):
 
-| | defaults | `rustfs_dirt_tolerant` + `rustfs_durability_mode: relaxed` |
+| | defaults | `rustfs_tolerance_tolerant` + `rustfs_durability_mode: relaxed` |
 |---|---|---|
 | PUT attempts that failed (503, reset, timeout) | 53 % | 36 % |
 | single-try PUT with a 60 s timeout succeeds | 58 % | 89 % |
@@ -207,7 +207,7 @@ settings of this role written today ("defaults") against the tolerance bundle (3
   are done and seven drives are slow. `rustfs_durability_mode: relaxed` keeps the shard `fdatasync` and leaves `xl.meta` and the directory
   entries to the page cache: a power loss of ONE node can lose its newest versions (the other nodes hold them; the unclean-shutdown heal repairs it); a killed process loses
   nothing. Upstream wants independent power domains for it. It is a decision, hence a variable of its own and not part of the bundle.
-* **What the bundle sets** (`rustfs_dirt_env`, the variable names keep their historical prefix; every key overridable per host through `rustfs_dirt_env_override`): a drive goes offline only after
+* **What the bundle sets** (`rustfs_tolerance_env`; every key overridable per host through `rustfs_tolerance_env_override`): a drive goes offline only after
   1000 consecutive timeouts (default 2), probe and operation timeouts of 120-300 s instead of 5-30 s, RPC deadline 300 s, connect timeout 10 s, HTTP/2 keep-alive timeouts 60 s, lock
   timeouts 20 s / 10 s, readiness not withdrawn after 30 s without a completed object stage. It makes RustFS wait for a slow drive instead of
   dropping it, which with 8+2 matters because two more slow or flapping nodes already take the set below write quorum.
@@ -280,11 +280,12 @@ Enable with `rustfs_hostwatch: true`; options as a map in `rustfs_hostwatch_opti
 **Event log.** With `--event-log` (the role sets `~/.local/state/crfs/hostwatch-events.log`) every decision and every change of the RustFS unit is appended as one line: an ISO-8601 timestamp with time zone, then the message. Messages are the decisions (`WEDGE: ...`, `re-admit: ...`), failed commands or steps, and `unit: ...` lines carrying systemd's own view of the RustFS unit (InvocationID, ActiveState, Result, ExecMainStatus, NRestarts) plus the status JSON, so the exit reason survives a restart. The file is size-capped: at `--event-log-max` bytes (default 1,000,000) it is rotated to `hostwatch-events.log.1`, one generation kept. Per-cycle status lines are not persisted. Example of why a node was fenced and when it came back:
 
 ```
-2026-10-25T14:02:11+0000 WEDGE: TLS probe failing for 41 s (disk probe 3.0 s): fencing for at least 60 s
-2026-10-25T14:09:40+0000 re-admit: disk probes fast (420 ms), starting the node
+2026-10-25T08:54:09+0200 WEDGE: TLS probe failing for 41 s (disk probe 3.0 s): fencing for at least 30 s
+...
+2026-10-25T08:55:16+0200 re-admit: disk probes fast (333 ms), starting the node
 ```
 
-Read it as: the node's TLS endpoint did not answer for 41 s while a disk probe took 3 s, so the watcher fenced the node; it was started again once the disk probes were fast again.
+Read it as: the node's TLS endpoint did not answer for 41 s while a disk probe took 3 s, so the watcher fenced the node; about 70 s later it was started again once the disk probes were fast again.
 
 Tests: `tests/fixture/test-hostwatch.py` (state machine) and the env-file render test.
 

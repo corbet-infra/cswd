@@ -41,16 +41,18 @@ return 503). `/minio/health/ready` flips only when the node can serve. All waits
   accepted with 1 node down).
 * Disk space alone would give 8/10 of the raw: ten accounts of 910 GiB = about 7.1 TiB. **In practice the file quota
   is the limit, not the disk space** (next paragraph).
-* **File-limit arithmetic.** The provider's file quota is 500 files per GiB of disk quota plus a 25 % burst
-  ([knowledge base article](https://pulsedmedia.com/clients/knowledgebase.php?action=displayarticle&id=113)). With 8+2 every
+* **File-limit arithmetic.** The provider's soft file limit is 500 files per GiB of disk quota; the hard limit is
+  25 % higher, but above the soft limit writes only work for a grace period, so size against the soft limit
+  ([knowledge base article](https://pulsedmedia.com/clients/index.php/knowledgebase/113/Is-there-a-fixed-number-of-inodes-per-TB-How-file-limits-are-calculated.html);
+  every file, directory and symlink counts). With 8+2 every
   account holds a piece of EVERY object, and RustFS uses about 3.7 files and directories per object per drive (measured
   2026-10-25: 446 objects = 1,632 entries; small objects stored inline in `xl.meta` use fewer). About 76k files are already
   taken by the account's own platform files (measured 2026-10-25 on one 1 TB account). So:
 
-  `max objects = (disk_quota_GiB x 500 x (1 or 1.25) - platform_files) / 3.7`
+  `max objects = (disk_quota_GiB x 500 - platform_files) / 3.7`
 
-  `quota -s` over SSH shows your own quota and usage. With 1 TB accounts (455k files, 569k with the burst) that is roughly
-  100k-130k objects, i.e. about 1.7 TiB at 16 MiB objects and less with smaller objects. Adding accounts to the same erasure
+  `quota -s` over SSH shows your own quota and usage. With 1 TB accounts (a soft limit of about 455k files) that is roughly
+  100k objects, i.e. about 1.5 TiB at 16 MiB objects and less with smaller objects. Adding accounts to the same erasure
   set does not raise the limit (each account holds every object); more erasure sets or larger accounts do.
 * RAM per node: roughly 100-150 MiB RSS idle; in a simulated 8+2 cluster under load about 450 MiB RSS and about 640 MiB
   peak for the whole account cgroup, which fits the 1250 MiB cap only after the debloat step.

@@ -55,3 +55,15 @@ seaweed_s3_grpc_port: 0
 seaweed_s3_sops_file: ""            # sops file with the S3 identity
 seaweed_s3_access_sops_key: ""
 seaweed_s3_secret_sops_key: ""
+
+# Memory caps and OOM order on a box that runs everything (cgroup v1: no enforced MemoryMax in user units). Kill order: S3 gateway, filer, volume, master last.
+seaweed_filer_block_cache_mb: 4
+seaweed_filer_write_buffer_mb: 4
+seaweed_s3_cache_mb: 16
+seaweed_s3_reader_cache_mb: 16
+seaweed_s3_upload_limit_mb: 64
+seaweed_s3_upload_files: 4
+seaweed_oom_s3: 900
+seaweed_oom_filer: 600
+seaweed_oom_volume: 300
+seaweed_oom_master: 0

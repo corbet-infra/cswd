@@ -16,7 +16,7 @@ TimeoutStopSec=30
 UMask=0077
 StandardError=append:{{ seaweed_log_dir }}/volume.log
 # cgroup v1: MemoryMax of a user unit is not enforced; the account as a whole is capped (about 1250 MiB including page cache).
-OOMScoreAdjust=300
+OOMScoreAdjust={{ seaweed_oom_volume }}
 Nice=5
 
 [Install]

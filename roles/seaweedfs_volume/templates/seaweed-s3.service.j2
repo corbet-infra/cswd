@@ -9,12 +9,13 @@ Environment=HOME={{ ansible_facts['user_dir'] }}
 ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr s3 \
   -filer={{ seaweed_public_ip }}:{{ seaweed_filer_http_port }}.{{ seaweed_filer_grpc_port }} -ip.bind=0.0.0.0 \
   -port=0 -port.https={{ seaweed_s3_https_port }} -port.grpc={{ seaweed_s3_grpc_port }} -port.iceberg=0 -port.lance=0 \
-  -cert.file={{ seaweed_tls_dir }}/cert.pem -key.file={{ seaweed_tls_dir }}/key.pem -config={{ ansible_facts['user_dir'] }}/.seaweedfs/s3.json
+  -cert.file={{ seaweed_tls_dir }}/cert.pem -key.file={{ seaweed_tls_dir }}/key.pem -config={{ ansible_facts['user_dir'] }}/.seaweedfs/s3.json \
+  -cacheCapacityMB={{ seaweed_s3_cache_mb }} -readerCacheSizeMB={{ seaweed_s3_reader_cache_mb }} -concurrentUploadLimitMB={{ seaweed_s3_upload_limit_mb }} -concurrentFileUploadLimit={{ seaweed_s3_upload_files }}
 StandardError=append:{{ seaweed_log_dir }}/s3.log
 Restart=always
 RestartSec=10
 UMask=0077
-OOMScoreAdjust=100
+OOMScoreAdjust={{ seaweed_oom_s3 }}
 Nice=5
 
 [Install]

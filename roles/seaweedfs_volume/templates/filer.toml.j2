@@ -2,3 +2,6 @@
 [leveldb2]
 enabled = true
 dir = "{{ seaweed_base_dir }}/data/seaweed-filer/ldb"
+# cgroup v1: user units have no enforced MemoryMax, so every cache is capped by program settings (8 partitioned stores)
+block_cache_size_mb = {{ seaweed_filer_block_cache_mb }}
+write_buffer_size_mb = {{ seaweed_filer_write_buffer_mb }}

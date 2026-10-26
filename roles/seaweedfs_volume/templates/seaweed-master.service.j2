@@ -12,6 +12,7 @@ ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr mas
 Restart=always
 RestartSec=10
 UMask=0077
+StandardError=append:{{ seaweed_log_dir }}/master.log
 OOMScoreAdjust=100
 Nice=5
 

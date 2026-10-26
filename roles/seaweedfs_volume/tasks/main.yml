@@ -92,12 +92,12 @@
     state: stopped
     scope: user
   failed_when: false
-  when: not seaweed_master_enable and seaweedfs_volume_start
+  when: not (seaweed_master_enable | bool) and (seaweedfs_volume_start | bool)
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
 - name: Master (this box hosts one)
-  when: seaweed_master_enable
+  when: seaweed_master_enable | bool
   block:
     - name: Master data directory
       ansible.builtin.file:

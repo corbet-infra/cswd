@@ -187,3 +187,37 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
+- name: swfs-filerwatch (self-fence of this box's filer and S3 gateway when it is cut off from most peers)
+  when: (seaweed_filerwatch_enable | bool) and (seaweed_filer_enable | bool)
+  block:
+    - name: Status and event directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ seaweed_base_dir }}/status"
+        - "{{ ansible_facts['user_dir'] }}/.local/state/crfs"
+    - name: swfs-filerwatch script
+      ansible.builtin.copy:
+        src: swfs-filerwatch.py
+        dest: "{{ seaweed_base_dir }}/bin/swfs-filerwatch.py"
+        mode: "0700"
+      register: seaweed_fw_script
+    - name: swfs-filerwatch unit
+      ansible.builtin.template:
+        src: swfs-filerwatch.service.j2
+        dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-filerwatch.service"
+        mode: "0600"
+      register: seaweed_fw_unit
+    - name: swfs-filerwatch enabled, restarted when its script or unit changed
+      ansible.builtin.systemd_service:
+        name: swfs-filerwatch.service
+        daemon_reload: true
+        enabled: true
+        state: "{{ ('restarted' if (seaweed_fw_script is changed or seaweed_fw_unit is changed) else 'started') if (seaweedfs_volume_start | bool) else omit }}"
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+

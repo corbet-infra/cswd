@@ -63,6 +63,9 @@ seaweed_s3_cache_mb: 0
 seaweed_s3_reader_cache_mb: 8
 seaweed_s3_upload_limit_mb: 32
 seaweed_s3_upload_files: 2
+# Volume server in-flight request budgets in MiB (0 = weed default, 256 each). Lowered on boxes where the whole account has 1.25 GiB.
+seaweed_volume_upload_limit_mb: 0
+seaweed_volume_download_limit_mb: 0
 seaweed_oom_s3: 900
 seaweed_oom_filer: 600
 seaweed_oom_volume: 300

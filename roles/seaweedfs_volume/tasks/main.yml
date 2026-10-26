@@ -85,6 +85,17 @@
     mode: "0600"
   register: seaweed_unit
 
+- name: Master stopped and disabled (this box hosts none)
+  ansible.builtin.systemd_service:
+    name: seaweed-master.service
+    enabled: false
+    state: stopped
+    scope: user
+  failed_when: false
+  when: not seaweed_master_enable and seaweedfs_volume_start
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
 - name: Master (this box hosts one)
   when: seaweed_master_enable
   block:

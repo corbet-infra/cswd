@@ -10,7 +10,7 @@ ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr vol
   -ip={{ seaweed_public_ip }} -ip.bind=0.0.0.0 -port={{ seaweed_http_port }} -port.grpc={{ seaweed_grpc_port }} \
   -mserver={{ seaweed_master }} -dir={{ seaweed_data_dir }} -max={{ seaweed_max_volumes }} -minFreeSpace={{ seaweed_min_free_space }} \
   -index={{ seaweed_index }} -dataCenter={{ seaweed_data_center }} -rack={{ seaweed_rack }} \
-  -compactionMBps={{ seaweed_compaction_mbps }} -idleTimeout={{ seaweed_idle_timeout }} -readMode=local
+  -compactionMBps={{ seaweed_compaction_mbps }} -idleTimeout={{ seaweed_idle_timeout }} -readMode=local{% if seaweed_volume_upload_limit_mb | int > 0 %} -concurrentUploadLimitMB={{ seaweed_volume_upload_limit_mb }}{% endif %}{% if seaweed_volume_download_limit_mb | int > 0 %} -concurrentDownloadLimitMB={{ seaweed_volume_download_limit_mb }}{% endif %}{{ "" }}
 Restart=always
 RestartSec=10
 TimeoutStopSec=30

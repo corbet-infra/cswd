@@ -3,9 +3,9 @@
 # `weed volume` on one box. Packed volume files: a box holds a few hundred files however many objects it stores, which is the point
 # against the provider's file quota (soft limit 500 files per GiB, every file counts). The master, the filer and the S3 gateway run
 # elsewhere (Frankfurt); this role only installs and configures the volume server and does not start it (seaweedfs_volume_start does).
-seaweed_version: "4.50"
+seaweed_version: "4.51"
 seaweed_download_url: "https://github.com/seaweedfs/seaweedfs/releases/download/{{ seaweed_version }}/linux_amd64.tar.gz"
-seaweed_sha256: "8fc88061421a74d1cd486d1cd9dc5874d6495f9ed17fed8fa677bb16bd195b07"
+seaweed_sha256: "c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee"
 seaweed_base_dir: "{{ ansible_facts['user_dir'] }}/cold"
 seaweed_bin_dir: "{{ seaweed_base_dir }}/bin"
 seaweed_data_dir: "{{ seaweed_base_dir }}/data/seaweed"
@@ -35,3 +35,23 @@ seaweed_master_grpc_port: 0
 seaweed_master_peers: ""            # empty = single master
 seaweed_volume_size_limit_mb: 1024
 seaweed_default_replication: "010"  # two copies on different racks
+
+# Master maintenance script and cadence (default: no EC, the TR2 trial). The EC trial (SW1) sets seaweed_master_scripts.
+seaweed_master_sleep_minutes: 17
+seaweed_master_scripts: |
+  lock
+  volume.deleteEmpty -quietFor=24h -apply
+  volume.balance -apply
+  volume.fix.replication -apply
+  s3.clean.uploads -timeAgo=24h
+  unlock
+
+# Optional filer with its S3 gateway on this box (SW1: three filers with local leveldb2 stores that aggregate each other's metadata).
+seaweed_filer_enable: false
+seaweed_filer_http_port: 0
+seaweed_filer_grpc_port: 0
+seaweed_s3_https_port: 0
+seaweed_s3_grpc_port: 0
+seaweed_s3_sops_file: ""            # sops file with the S3 identity
+seaweed_s3_access_sops_key: ""
+seaweed_s3_secret_sops_key: ""

@@ -2,14 +2,9 @@
 # empty-volume removal and upload cleanup only. Vacuum is the master's own periodic job (-garbageThreshold).
 [master.maintenance]
 scripts = """
-  lock
-  volume.deleteEmpty -quietFor=24h -apply
-  volume.balance -apply
-  volume.fix.replication -apply
-  s3.clean.uploads -timeAgo=24h
-  unlock
+{{ seaweed_master_scripts | indent(2, true) }}
 """
-sleep_minutes = 17
+sleep_minutes = {{ seaweed_master_sleep_minutes }}
 [master.volume_growth]
 copy_1 = 2
 copy_2 = 2

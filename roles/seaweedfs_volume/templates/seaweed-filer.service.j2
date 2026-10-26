@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=SeaweedFS filer with S3 gateway ({{ inventory_hostname }})
+
+[Service]
+Type=simple
+Environment=HOME={{ ansible_facts['user_dir'] }}
+WorkingDirectory={{ seaweed_base_dir }}/data/seaweed-filer
+ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr filer \
+  -ip={{ seaweed_public_ip }} -ip.bind=0.0.0.0 -port={{ seaweed_filer_http_port }} -port.grpc={{ seaweed_filer_grpc_port }} \
+  -master={{ seaweed_master }} -dataCenter={{ seaweed_data_center }} -rack={{ seaweed_rack }} -defaultStoreDir={{ seaweed_base_dir }}/data/seaweed-filer/ldb \
+  -s3 -s3.port=0 -s3.port.https={{ seaweed_s3_https_port }} -s3.port.grpc={{ seaweed_s3_grpc_port }} -s3.port.iceberg=0 -s3.port.lance=0 -s3.cert.file={{ seaweed_tls_dir }}/cert.pem -s3.key.file={{ seaweed_tls_dir }}/key.pem \
+  -s3.config={{ ansible_facts['user_dir'] }}/.seaweedfs/s3.json
+Restart=always
+RestartSec=10
+UMask=0077
+OOMScoreAdjust=100
+Nice=5
+
+[Install]
+WantedBy=default.target

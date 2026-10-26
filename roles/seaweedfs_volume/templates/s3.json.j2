@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "jfs",
+      "credentials": [{"accessKey": "{{ lookup('corbet.crfs.sops', seaweed_s3_sops_file, seaweed_s3_access_sops_key) }}", "secretKey": "{{ lookup('corbet.crfs.sops', seaweed_s3_sops_file, seaweed_s3_secret_sops_key) }}"}],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

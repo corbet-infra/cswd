@@ -59,11 +59,16 @@ seaweed_s3_secret_sops_key: ""
 # Memory caps and OOM order on a box that runs everything (cgroup v1: no enforced MemoryMax in user units). Kill order: S3 gateway, filer, volume, master last.
 seaweed_filer_block_cache_mb: 4
 seaweed_filer_write_buffer_mb: 4
-seaweed_s3_cache_mb: 16
-seaweed_s3_reader_cache_mb: 16
-seaweed_s3_upload_limit_mb: 64
-seaweed_s3_upload_files: 4
+seaweed_s3_cache_mb: 0
+seaweed_s3_reader_cache_mb: 8
+seaweed_s3_upload_limit_mb: 32
+seaweed_s3_upload_files: 2
 seaweed_oom_s3: 900
 seaweed_oom_filer: 600
 seaweed_oom_volume: 300
 seaweed_oom_master: 0
+# Go soft memory limits (GOMEMLIMIT): the runtime garbage-collects harder instead of growing past them (cgroup v1 has no enforced limit for user units)
+seaweed_gomemlimit_s3: 250MiB
+seaweed_gomemlimit_filer: 300MiB
+seaweed_gomemlimit_volume: 250MiB
+seaweed_gomemlimit_master: 120MiB

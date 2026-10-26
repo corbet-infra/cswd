@@ -3,7 +3,7 @@
 Description=swfs-filerwatch ({{ inventory_hostname }}): stops this box's filer and S3 gateway while it reaches fewer than a majority of the filers
 
 [Service]
-ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-filerwatch.py --filers {{ seaweed_filerwatch_filers }} --self {{ seaweed_public_ip }}:{{ seaweed_filer_grpc_port }} --masters {{ seaweed_filerwatch_masters }} --stop-cmd "systemctl --user stop seaweed-s3.service seaweed-filer.service" --start-cmd "systemctl --user start seaweed-filer.service seaweed-s3.service" --flag-file {{ seaweed_base_dir }}/status/filerwatch.fenced --status-file {{ seaweed_base_dir }}/status/filerwatch.json --event-log {{ ansible_facts['user_dir'] }}/.local/state/crfs/filerwatch-events.log --interval {{ seaweed_filerwatch_interval }} --fence-seconds {{ seaweed_filerwatch_fence_seconds }} --unfence-seconds {{ seaweed_filerwatch_unfence_seconds }}
+ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-filerwatch.py --filers {{ seaweed_filerwatch_filers }} --self {{ seaweed_public_ip }}:{{ seaweed_filer_grpc_port }} --masters {{ seaweed_filerwatch_masters }} --stop-cmd "systemctl --user stop seaweed-s3.service seaweed-filer.service" --start-cmd "systemctl --user start seaweed-filer.service seaweed-s3.service" --flag-file {{ seaweed_base_dir }}/status/filerwatch.fenced --status-file {{ seaweed_base_dir }}/status/filerwatch.json --event-log {{ ansible_facts['user_dir'] }}/.local/state/crfs/filerwatch-events.log {% if seaweed_filerwatch_mode == "observe" %}--observe {% endif %}--interval {{ seaweed_filerwatch_interval }} --fence-seconds {{ seaweed_filerwatch_fence_seconds }} --unfence-seconds {{ seaweed_filerwatch_unfence_seconds }}
 Restart=always
 RestartSec=5
 UMask=0077

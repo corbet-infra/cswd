@@ -68,6 +68,21 @@ class Fence:
         return None
 
 
+class Strikes:
+    """A peer is unreachable only after N consecutive failed connects, so a busy neighbour box does not count as a partition."""
+
+    def __init__(self, n=3):
+        self.n = n
+        self.fails = {}
+
+    def seen(self, peer, ok):
+        if ok:
+            self.fails[peer] = 0
+            return True
+        self.fails[peer] = self.fails.get(peer, 0) + 1
+        return self.fails[peer] < self.n
+
+
 def probe(addr, timeout=3.0):
     host, port = addr.rsplit(":", 1)
     try:
@@ -96,6 +111,8 @@ def main():
     p.add_argument("--unfence-seconds", type=float, default=300)
     p.add_argument("--flap-window", type=float, default=1800)
     p.add_argument("--max-unfence-seconds", type=float, default=3600)
+    p.add_argument("--strikes", type=int, default=3, help="a peer counts as unreachable only after this many consecutive failed connects")
+    p.add_argument("--observe", action="store_true", help="compute and log decisions as WOULD FENCE / WOULD UNFENCE, touch no unit and no flag file")
     p.add_argument("--stop-cmd", required=True)
     p.add_argument("--start-cmd", required=True)
     p.add_argument("--flag-file", required=True)
@@ -104,13 +121,17 @@ def main():
     a = p.parse_args()
     filers = [x for x in a.filers.split(",") if x]
     masters = [x for x in a.masters.split(",") if x]
-    fence = Fence(len(filers), a.fence_seconds, a.unfence_seconds, a.flap_window, a.max_unfence_seconds, fenced=os.path.exists(a.flag_file))
+    fence = Fence(len(filers), a.fence_seconds, a.unfence_seconds, a.flap_window, a.max_unfence_seconds, fenced=(not a.observe and os.path.exists(a.flag_file)))
+    strikes = Strikes(a.strikes)
     while True:
         now = time.monotonic()
-        table = {f: (True if f == a.me else probe(f)) for f in filers}
+        table = {f: (True if f == a.me else strikes.seen(f, probe(f))) for f in filers}
         reachable = sum(table.values())
         action = fence.step(now, reachable)
-        if action == "fence":
+        if action and a.observe:
+            log(a.event_log, "WOULD %s: %d of %d filers reachable (majority %d); table=%s masters=%s"
+                % (action.upper(), reachable, fence.total, fence.majority, json.dumps(table), json.dumps({m: probe(m) for m in masters})))
+        elif action == "fence":
             log(a.event_log, "FENCE: %d of %d filers reachable (< %d) for %ds; stopping s3 + filer; table=%s masters=%s"
                 % (reachable, fence.total, fence.majority, a.fence_seconds, json.dumps(table), json.dumps({m: probe(m) for m in masters})))
             open(a.flag_file, "w").write(time.strftime("%Y-%m-%dT%H:%M:%S%z") + "\n")
@@ -125,7 +146,7 @@ def main():
         if a.status_file:
             tmp = a.status_file + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "fenced": fence.fenced, "reachable": reachable, "total": fence.total,
+                json.dump({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "mode": "observe" if a.observe else "enforce", "fenced": fence.fenced, "reachable": reachable, "total": fence.total,
                            "majority": fence.majority, "unfence_wait": fence.wait, "table": table}, f)
             os.replace(tmp, a.status_file)
         time.sleep(a.interval)

@@ -70,5 +70,28 @@ class FenceTest(unittest.TestCase):
         self.assertEqual(run(f, [(t, 7) for t in range(0, 400, 10)]), [(300, "unfence")])
 
 
+class StrikesTest(unittest.TestCase):
+    def test_two_failures_still_count_as_reachable(self):
+        s = fw.Strikes(3)
+        self.assertTrue(s.seen("a", False))
+        self.assertTrue(s.seen("a", False))
+        self.assertFalse(s.seen("a", False))
+
+    def test_success_resets_the_count(self):
+        s = fw.Strikes(3)
+        s.seen("a", False)
+        s.seen("a", False)
+        self.assertTrue(s.seen("a", True))
+        self.assertTrue(s.seen("a", False))
+        self.assertTrue(s.seen("a", False))
+        self.assertFalse(s.seen("a", False))
+
+    def test_peers_are_independent(self):
+        s = fw.Strikes(2)
+        s.seen("a", False)
+        self.assertTrue(s.seen("b", False))
+        self.assertFalse(s.seen("a", False))
+
+
 if __name__ == "__main__":
     unittest.main()

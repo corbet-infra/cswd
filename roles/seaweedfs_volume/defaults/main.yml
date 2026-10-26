@@ -78,6 +78,7 @@ seaweed_gomemlimit_master: 120MiB
 
 # swfs-filerwatch (self-fence of a filer that is cut off from most peers). Off by default; design in SW1's report.
 seaweed_filerwatch_enable: false
+seaweed_filerwatch_mode: observe     # observe = log WOULD FENCE/UNFENCE only; enforce = stop and start the units
 seaweed_filerwatch_interval: 10
 seaweed_filerwatch_fence_seconds: 60
 seaweed_filerwatch_unfence_seconds: 300

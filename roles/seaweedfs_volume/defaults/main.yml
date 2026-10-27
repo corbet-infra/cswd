@@ -55,6 +55,10 @@ seaweed_s3_grpc_port: 0
 seaweed_s3_sops_file: ""            # sops file with the S3 identity
 seaweed_s3_access_sops_key: ""
 seaweed_s3_secret_sops_key: ""
+# Optional second identity `backup` (actions Read and List only: it can neither write nor delete): for the nightly pull of a backup host.
+seaweed_s3_backup_sops_file: ""
+seaweed_s3_backup_access_sops_key: access_key
+seaweed_s3_backup_secret_sops_key: secret_key
 
 # Memory caps and OOM order on a box that runs everything (cgroup v1: no enforced MemoryMax in user units). Kill order: S3 gateway, filer, volume, master last.
 seaweed_filer_block_cache_mb: 4

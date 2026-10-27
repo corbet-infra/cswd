@@ -40,7 +40,8 @@ seaweed_inventory_group: swfs       # group whose members may use the master HTT
 # Master HTTP admin handlers (/col/delete, /vol/grow, /vol/vacuum, /dir/assign, /dir/status ...) are open to everyone unless -whiteList is set.
 # Everything else (volume, filer, S3, health) is mTLS or signed; the cluster itself talks gRPC to the masters.
 seaweed_master_whitelist: "{{ (groups[seaweed_inventory_group] | map('extract', hostvars, 'ansible_host') | list + ['127.0.0.1']) | join(',') }}"
-seaweed_jwt_sops_file: ""           # sops file with the volume-write JWT signing key; empty = no JWT (volume writes then rely on mTLS only)
+seaweed_jwt_sops_file: ""           # NOTE: a change of the JWT key must reach master AND volume on ALL boxes within minutes (-e service_serial=7 or back-to-back); while keys
+# differ, writes fail. sops file with the volume-write JWT signing key; empty = no JWT (volume writes then rely on mTLS only)
 seaweed_jwt_sops_key: jwt_signing_key
 seaweed_master_peers: ""            # empty = single master
 seaweed_volume_size_limit_mb: 1024

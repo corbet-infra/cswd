@@ -176,7 +176,7 @@
         name: seaweed-filer.service
         daemon_reload: true
         enabled: true
-        state: "{{ ('restarted' if (seaweed_funit.changed or seaweed_sec.changed or seaweed_ftoml.changed or seaweed_s3json.changed) else 'started') if seaweedfs_volume_start else omit }}"
+        state: "{{ ('restarted' if (seaweed_funit.changed or seaweed_sec.changed or seaweed_ftoml.changed) else 'started') if seaweedfs_volume_start else omit }}"
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"

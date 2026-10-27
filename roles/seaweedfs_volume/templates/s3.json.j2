@@ -10,6 +10,12 @@
       "credentials": [{"accessKey": "{{ lookup('corbet.cpmd.sops', seaweed_s3_backup_sops_file, seaweed_s3_backup_access_sops_key) }}", "secretKey": "{{ lookup('corbet.cpmd.sops', seaweed_s3_backup_sops_file, seaweed_s3_backup_secret_sops_key) }}"}],
       "actions": ["Read", "List"]
     }{% endif %}
+{% for app in seaweed_s3_app_identities %},
+    {
+      "name": "{{ app.name }}",
+      "credentials": [{"accessKey": "{{ lookup('corbet.cpmd.sops', app.sops_file, app.access_sops_key) }}", "secretKey": "{{ lookup('corbet.cpmd.sops', app.sops_file, app.secret_sops_key) }}"}],
+      "actions": ["Read:{{ app.bucket }}", "Write:{{ app.bucket }}", "List:{{ app.bucket }}"]
+    }{% endfor %}
 
   ]
 }

@@ -12,8 +12,11 @@
     that:
       - seaweed_master | length > 0
       - seaweed_grpc_port | int > 0
+      - seaweed_http_port | int > 0
+      - seaweed_ca_cert_file | length > 0
+      - seaweed_ca_key_sops_file | length > 0
       - not seaweed_master_enable or (seaweed_master_http_port | int > 0 and seaweed_master_grpc_port | int > 0)
-    fail_msg: "seaweed_master and a host variable seaweed_grpc_port (an assigned, unused port) must be set"
+    fail_msg: "seaweed_master, seaweed_http_port, the host variable seaweed_grpc_port (assigned, unused ports) and seaweed_ca_cert_file / seaweed_ca_key_sops_file must be set"
     quiet: true
 
 - name: Directories (private)
@@ -31,13 +34,17 @@
     - "{{ ansible_facts['user_dir'] }}/.seaweedfs"
     - "{{ ansible_facts['user_dir'] }}/.config/systemd/user"
 
-- name: Leaf certificate from the cluster CA (the rustfs role's tls tasks; key made on the box)
+- name: Leaf certificate from your CA (the cpmd tls role; key made on the box)
   ansible.builtin.include_role:
-    name: corbet.crfs.rustfs
-    tasks_from: tls.yml
+    name: corbet.cpmd.tls
   vars:
-    rustfs_tls_names: "{{ seaweed_tls_names }}"
-    rustfs_tls_ips: "{{ seaweed_tls_ips }}"
+    tls_dir: "{{ seaweed_tls_dir }}"
+    tls_names: "{{ seaweed_tls_names }}"
+    tls_ips: "{{ seaweed_tls_ips }}"
+    tls_ca_cert_file: "{{ seaweed_ca_cert_file }}"
+    tls_ca_key_sops_file: "{{ seaweed_ca_key_sops_file }}"
+    tls_ca_key_sops_key: "{{ seaweed_ca_key_sops_key }}"
+    tls_leaf_days: "{{ seaweed_leaf_days }}"
 
 - name: Binary present
   ansible.builtin.stat:

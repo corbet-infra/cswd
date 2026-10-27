@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Switch the collection namespace of this repository and of its sibling collections in one step:
+#   tools/set-namespace <new namespace>
+# The current namespace is the one in galaxy.yml. Every fully qualified name `<old>.<collection>.` (cpmd, crfs, cswd) in
+# the tracked files is rewritten, then galaxy.yml. Review the result with `git diff`, run the tests, commit.
+set -eu
+new=${1:?usage: set-namespace <new namespace>}
+case $new in *[!a-z0-9_]*|"") echo "set-namespace: a namespace is lowercase letters, digits and underscores" >&2; exit 2;; esac
+cd "$(dirname "$0")/.."
+old=$(sed -n 's/^namespace: *//p' galaxy.yml)
+[ -n "$old" ] || { echo "set-namespace: no namespace in galaxy.yml" >&2; exit 1; }
+[ "$old" != "$new" ] || { echo "set-namespace: already $new"; exit 0; }
+for c in cpmd crfs cswd; do
+  git grep -l -I -E "\\b$old\\.$c\\b|ansible_collections/$old/$c\\b" -- . ':!COPYING' ':!LICENSE' | while read -r f; do
+    sed -i -E "s#\\b$old\\.$c\\b#$new.$c#g; s#ansible_collections/$old/$c\\b#ansible_collections/$new/$c#g" "$f"
+  done
+done
+sed -i "s/^namespace: .*/namespace: $new/" galaxy.yml
+echo "namespace $old -> $new"

@@ -1,2 +1,0 @@
-# false positive: a sops key NAME, not a secret
-32c824b0d686efb7331b012acd32ad2e84ea2f74:playbooks/iam.yml:generic-api-key:10

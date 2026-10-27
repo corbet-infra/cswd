@@ -7,7 +7,7 @@ the account limit is 1250 MiB), the load, and the age of the data. With --cluste
 --interval: the number of EC volumes with fewer than 14 shards (weed shell volume.list), the filers registered with the masters
 (cluster.ps), and a write-via-filer-A / read-via-filer-B probe over every pair partner (the S3 gateways), giving the largest time a
 marker object needed to become visible on a peer, or null when a peer did not answer. Run --cluster on two boxes so that the checks
-survive the loss of one. Gatus turns the JSON into alerts (kubernetes/corbet-devops/gatus.nix); the weed shell needs the box's own
+survive the loss of one. Gatus turns the JSON into alerts; the weed shell needs the box's own
 mutual-TLS security.toml, which is why this runs on the boxes and not on the monitoring side.
 """
 import argparse

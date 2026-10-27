@@ -4,7 +4,7 @@
 
 Why: the filer lock ring is fed by the masters (a filer leaves it only when its connection to the masters ends), and there is no
 filer-to-filer health check. A box that is cut off from most peers but still connected to a master stays in the ring, and every S3
-write whose lock key it owns then fails after several 60 s timeouts for the filers that cannot reach it (SW1 2026-10-26).
+write whose lock key it owns then fails after several 60 s timeouts for the filers that cannot reach it.
 
 What it does: every --interval seconds it opens a TCP connection to the gRPC port of every filer (itself counts as reachable). When
 fewer than a majority (total // 2 + 1) are reachable for --fence-seconds in a row, it stops the S3 gateway and the filer

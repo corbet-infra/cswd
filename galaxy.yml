@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 ---
 namespace: corbet
-name: crfs
+name: cswd
 version: 0.1.0
 readme: README.md
 authors:
   - Julian Y. Richard Corbet
 description: >-
-  RustFS on rented seedbox accounts (Pulsed Media Storage Boxes): debloat the shop image, harden the account,
-  run a distributed erasure-coded RustFS cluster as systemd --user units, watch the account quota. No root, no become.
+  SeaweedFS on rented seedbox accounts (Pulsed Media Storage Boxes): volume servers, masters, filers and S3 gateways as
+  systemd --user units with mutual TLS, a wedge watchdog for filers and a health JSON per box. No root, no become.
 license:
   - LGPL-3.0-or-later
 tags:
   - storage
   - rootless
   - s3
-  - rustfs
+  - seaweedfs
   - seedbox
-dependencies: {}
-repository: https://git.corbet.ch/corbet-infra/crfs
-issues: https://git.corbet.ch/corbet-infra/crfs/issues
+dependencies:
+  corbet.cpmd: ">=0.1.0"
+repository: https://git.corbet.ch/corbet-infra/cswd
+issues: https://git.corbet.ch/corbet-infra/cswd/issues
 build_ignore:
   - '*.tar.gz'
   - .gitignore

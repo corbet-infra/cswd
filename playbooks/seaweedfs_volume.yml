@@ -6,4 +6,4 @@
   gather_facts: false
   serial: "{{ service_serial | default(1) }}"
   roles:
-    - role: corbet.crfs.seaweedfs_volume
+    - role: corbet.cswd.seaweedfs_volume

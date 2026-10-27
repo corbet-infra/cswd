@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import subprocess
 import threading
 import time
@@ -163,12 +164,22 @@ def main():
     p.add_argument("--peer-s3", default="")
     p.add_argument("--bucket", default="health")
     p.add_argument("--cacert")
+    p.add_argument("--tls-cert", help="serve HTTPS with this certificate and REQUIRE a client certificate signed by --cacert (anonymous requests fail)")
+    p.add_argument("--tls-key")
     a = p.parse_args()
     state = State()
     threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()
-    HTTPServer(("0.0.0.0", a.port), make_handler(state)).serve_forever()
+    server = HTTPServer(("0.0.0.0", a.port), make_handler(state))
+    if a.tls_cert:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(a.tls_cert, a.tls_key)
+        ctx.load_verify_locations(a.cacert)
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

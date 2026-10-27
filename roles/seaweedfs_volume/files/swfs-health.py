@@ -11,6 +11,7 @@ survive the loss of one. Gatus turns the JSON into alerts (kubernetes/corbet-dev
 mutual-TLS security.toml, which is why this runs on the boxes and not on the monitoring side.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -57,7 +58,10 @@ def weed_shell(weed, masters, commands, timeout=90):
 
 
 def sigv4_curl(url, method, access, secret, body=None, timeout=15, cacert=None):
-    cmd = ["curl", "-s", "-m", str(timeout), "-o", "/dev/null", "-w", "%{http_code}", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", "%s:%s" % (access, secret), "-X", method]
+    # the payload hash is given explicitly: curl 7.88 (the boxes) otherwise signs differently than the gateway expects
+    digest = hashlib.sha256((body or "").encode()).hexdigest()
+    cmd = ["curl", "-s", "-m", str(timeout), "-o", "/dev/null", "-w", "%{http_code}", "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", "%s:%s" % (access, secret),
+           "-H", "x-amz-content-sha256: " + digest, "-X", method]
     if cacert:
         cmd += ["--cacert", cacert]
     if body is not None:
@@ -133,8 +137,12 @@ def cluster_loop(state, a):
         try:
             vl = weed_shell(a.weed, a.masters, ["volume.list"])
             n_short, ids, n_ec = parse_ec_short(vl)
-            ps = weed_shell(a.weed, a.masters, ["cluster.ps"])
-            filers = parse_filers(ps)
+            filers = None
+            for _ in range(4):  # the shell can list the filers a moment after it starts
+                filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
+                if filers:
+                    break
+                time.sleep(3)
             lag, missing = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
             state.set(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, filer_lag_max_s=lag,
                       filer_peers_not_answering=len(missing), filer_peers_missing=missing, cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))

@@ -1,0 +1,16 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-health ({{ inventory_hostname }}): health JSON for gatus (RAM of the account, EC shards, filers in the ring, filer lag)
+
+[Service]
+ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-health.py --port {{ seaweed_health_port }} --weed {{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed --masters {{ seaweed_master }} --cacert {{ seaweed_tls_dir }}/ca.pem --own-s3 https://{{ seaweed_public_ip }}:{{ seaweed_s3_https_port }} --peer-s3 {{ seaweed_health_peer_s3 }}{% if seaweed_health_cluster | bool %} --cluster{% endif %}
+
+Restart=always
+RestartSec=5
+UMask=0077
+OOMScoreAdjust=950
+Nice=10
+StandardError=append:{{ seaweed_log_dir }}/health.log
+
+[Install]
+WantedBy=default.target

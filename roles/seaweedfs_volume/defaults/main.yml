@@ -85,3 +85,9 @@ seaweed_filerwatch_unfence_seconds: 300
 # comma separated host:grpcport of ALL filers and of the masters (set in the group, built from the hosts' variables)
 seaweed_filerwatch_filers: ""
 seaweed_filerwatch_masters: ""
+
+# swfs-health (gatus polls GET http://<box>:<port>/health.json). The cluster-wide checks run only where seaweed_health_cluster is true.
+seaweed_health_enable: false
+seaweed_health_port: 0
+seaweed_health_cluster: false
+seaweed_health_peer_s3: ""      # comma separated https://host:port of every filer's S3 gateway

@@ -195,6 +195,10 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+    - name: Report the S3 gateway restart (a changed s3.json, unit or secret restarts it when seaweedfs_volume_start is true; swfs-tool prints this line)
+      ansible.builtin.debug:
+        msg: "restarted: s3"
+      when: seaweedfs_volume_start and (seaweed_s3unit.changed or seaweed_sec.changed or seaweed_s3json.changed)
 
 - name: swfs-filerwatch (self-fence of this box's filer and S3 gateway when it is cut off from most peers)
   when: (seaweed_filerwatch_enable | bool) and (seaweed_filer_enable | bool)

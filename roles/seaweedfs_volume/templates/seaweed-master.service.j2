@@ -8,7 +8,7 @@ Environment=GOMEMLIMIT={{ seaweed_gomemlimit_master }}
 ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr master -telemetry=false \
   -ip={{ seaweed_public_ip }} -ip.bind=0.0.0.0 -port={{ seaweed_master_http_port }} -port.grpc={{ seaweed_master_grpc_port }} \
   -mdir={{ seaweed_base_dir }}/data/seaweed-master -volumeSizeLimitMB={{ seaweed_volume_size_limit_mb }} \
-  -defaultReplication={{ seaweed_default_replication }} -garbageThreshold=0.3 -volumePreallocate=false \
+  -whiteList={{ seaweed_master_whitelist }} -defaultReplication={{ seaweed_default_replication }} -garbageThreshold=0.3 -volumePreallocate=false \
   {{ ('-peers=' ~ seaweed_master_peers) if seaweed_master_peers else '' }}
 Restart=always
 RestartSec=10

@@ -83,6 +83,7 @@
     src: security.toml.j2
     dest: "{{ ansible_facts['user_dir'] }}/.seaweedfs/security.toml"
     mode: "0600"
+  no_log: true   # carries the JWT signing key; also keeps it out of --diff
   register: seaweed_sec
 
 - name: Unit

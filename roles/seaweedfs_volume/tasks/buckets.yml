@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# The application buckets of seaweed_s3_app_identities, created once per cluster when missing (no hand step on a rebuilt cluster).
+# `weed shell` runs on this box against the masters; the owner is the admin identity (the first identity of s3.json), as for the buckets
+# made earlier with `aws s3 mb` and the admin keys. An existing bucket is never touched. Needs a running filer somewhere in the cluster.
+- name: Buckets of the cluster
+  ansible.builtin.command:
+    cmd: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed shell -master={{ seaweed_master }}"
+    stdin: "s3.bucket.list\n"
+  register: seaweed_bucket_list
+  changed_when: false
+  check_mode: false
+  run_once: true
+
+- name: Names of the existing buckets
+  ansible.builtin.set_fact:
+    seaweed_bucket_names: "{{ seaweed_bucket_list.stdout_lines | map('regex_replace', '^\\s*(\\S+).*$', '\\1') | list }}"
+  run_once: true
+
+- name: Buckets that are missing
+  ansible.builtin.set_fact:
+    seaweed_missing_buckets: "{{ seaweed_s3_app_identities | map(attribute='bucket') | unique | difference(seaweed_bucket_names) }}"
+  run_once: true
+
+- name: Create the missing buckets
+  ansible.builtin.command:
+    cmd: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed shell -master={{ seaweed_master }}"
+    stdin: "s3.bucket.create -name {{ item }} -owner {{ seaweed_s3_bucket_owner }}\n"
+  loop: "{{ seaweed_missing_buckets }}"
+  register: seaweed_bucket_created
+  changed_when: true
+  failed_when: seaweed_bucket_created.rc != 0 or 'error' in (seaweed_bucket_created.stdout | lower)
+  run_once: true
+
+- name: Missing buckets (check run)
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: buckets {{ seaweed_missing_buckets }} would be created"
+  when: seaweed_missing_buckets | length > 0 and ansible_check_mode
+  run_once: true

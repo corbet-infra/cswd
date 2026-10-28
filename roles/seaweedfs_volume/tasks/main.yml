@@ -249,3 +249,8 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
+- name: Application buckets
+  ansible.builtin.include_tasks: buckets.yml
+  when: (seaweed_filer_enable | bool) and (seaweedfs_volume_start | bool) and (seaweed_s3_app_identities | length > 0)
+

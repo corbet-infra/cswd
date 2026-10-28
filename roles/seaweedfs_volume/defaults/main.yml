@@ -77,6 +77,8 @@ seaweed_filer_write_buffer_mb: 4
 # One S3 identity per application bucket, scoped to that bucket only (Read, Write, List on it): a list of
 #   {name, bucket, sops_file, access_sops_key, secret_sops_key}; the secrets come from sops on the controller.
 seaweed_s3_app_identities: []
+# Owner of the application buckets the role creates: the admin identity of s3.json (the first one, `jfs`).
+seaweed_s3_bucket_owner: jfs
 seaweed_s3_cache_mb: 0
 seaweed_s3_reader_cache_mb: 8
 seaweed_s3_upload_limit_mb: 32

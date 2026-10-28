@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 ---
+# Modes (decision 2026-10-28): the shop re-chmods the whole account home from time to time (a root job, their 0770 default), so directory,
+# unit and tarball modes are not managed here; they protect nothing behind a private per-user group and a closed home. Only files that hold a
+# credential keep an explicit 0600 (security.toml, master.toml, filer.toml, s3.json, the TLS key); `swfs-tool` asserts at every roll that
+# none of them is group- or world-readable and that the home has other=0.
 # Installs and configures `weed volume` on one box. Starting is a separate switch (seaweedfs_volume_start).
 - name: Learn the account (user directory, uid)
   ansible.builtin.setup:
@@ -23,7 +27,6 @@
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    mode: "0700"
   loop:
     - "{{ seaweed_base_dir }}"
     - "{{ seaweed_bin_dir }}"
@@ -56,14 +59,12 @@
     url: "{{ seaweed_download_url }}"
     dest: "{{ seaweed_base_dir }}/dl/weed-{{ seaweed_version }}.tar.gz"
     checksum: "sha256:{{ seaweed_sha256 }}"
-    mode: "0600"
   when: not seaweed_bin_stat.stat.exists
 
 - name: Directory of this version
   ansible.builtin.file:
     path: "{{ seaweed_bin_dir }}/weed-{{ seaweed_version }}"
     state: directory
-    mode: "0700"
 
 - name: Unpack
   ansible.builtin.unarchive:
@@ -110,7 +111,6 @@
       ansible.builtin.file:
         path: "{{ seaweed_base_dir }}/data/seaweed-master"
         state: directory
-        mode: "0700"
     - name: master.toml
       ansible.builtin.template:
         src: master.toml.j2
@@ -149,7 +149,6 @@
       ansible.builtin.file:
         path: "{{ seaweed_base_dir }}/data/seaweed-filer/ldb"
         state: directory
-        mode: "0700"
     - name: filer.toml
       ansible.builtin.template:
         src: filer.toml.j2
@@ -203,7 +202,6 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        mode: "0700"
       loop:
         - "{{ seaweed_base_dir }}/status"
         - "{{ ansible_facts['user_dir'] }}/.local/state/crfs"
@@ -251,20 +249,3 @@
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
-
-# The unit files carry no secrets (those live in the 0600 env, toml and json files), so the mode is set apart from the template tasks:
-# a unit whose mode alone differs (e.g. a shop-side recursive chmod) must not read as "changed" and restart a storage server, because
-# the restarts above follow the registers of the template tasks, i.e. content only.
-- name: Unit files of this role
-  ansible.builtin.find:
-    paths: "{{ ansible_facts['user_dir'] }}/.config/systemd/user"
-    patterns: ["seaweed-*.service", "swfs-*.service"]
-  register: seaweed_unit_files
-
-- name: Unit file modes (private)
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    mode: "0600"
-  loop: "{{ seaweed_unit_files.files }}"
-  loop_control:
-    label: "{{ item.path }}"

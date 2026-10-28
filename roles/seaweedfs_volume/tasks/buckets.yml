@@ -10,6 +10,10 @@
   register: seaweed_bucket_list
   changed_when: false
   check_mode: false
+  # `weed shell` asks the masters in turn and the first answer can come from a follower ("raft.Server: Not current leader"); a retry reaches the leader
+  retries: 6
+  delay: 5
+  until: seaweed_bucket_list.rc == 0
   run_once: true
 
 - name: Names of the existing buckets
@@ -29,7 +33,9 @@
   loop: "{{ seaweed_missing_buckets }}"
   register: seaweed_bucket_created
   changed_when: true
-  failed_when: seaweed_bucket_created.rc != 0 or 'error' in (seaweed_bucket_created.stdout | lower)
+  retries: 6
+  delay: 5
+  until: seaweed_bucket_created.rc == 0 and 'error' not in (seaweed_bucket_created.stdout | lower)
   run_once: true
 
 - name: Missing buckets (check run)

@@ -76,7 +76,6 @@ seaweed_filer_block_cache_mb: 4
 seaweed_filer_write_buffer_mb: 4
 # One S3 identity per application bucket, scoped to that bucket only (Read, Write, List on it): a list of
 #   {name, bucket, sops_file, access_sops_key, secret_sops_key}; the secrets come from sops on the controller.
-# `acp: true` (optional) adds ReadAcp/WriteAcp on the bucket: clients that send `x-amz-acl` on PutObject (Nextcloud's object store sends ACL=private on every single-part upload) are refused without WriteAcp.
 seaweed_s3_app_identities: []
 # Owner of the application buckets the role creates: the admin identity of s3.json (the first one, `jfs`).
 seaweed_s3_bucket_owner: jfs

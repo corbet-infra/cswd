@@ -14,7 +14,7 @@
     {
       "name": "{{ app.name }}",
       "credentials": [{"accessKey": "{{ lookup('corbet.cpmd.sops', app.sops_file, app.access_sops_key) }}", "secretKey": "{{ lookup('corbet.cpmd.sops', app.sops_file, app.secret_sops_key) }}"}],
-      "actions": ["Read:{{ app.bucket }}", "Write:{{ app.bucket }}", "List:{{ app.bucket }}"]
+      "actions": ["Read:{{ app.bucket }}", "Write:{{ app.bucket }}", "List:{{ app.bucket }}"{% if app.acp | default(false) %}, "ReadAcp:{{ app.bucket }}", "WriteAcp:{{ app.bucket }}"{% endif %}]
     }{% endfor %}
 
   ]

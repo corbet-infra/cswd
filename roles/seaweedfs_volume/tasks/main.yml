@@ -250,6 +250,41 @@
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
+- name: swfs-maint (box-local EC scrub and cleanup on a weekly night of this box)
+  when: seaweed_maint_enable | bool
+  vars:
+    _swfs_maint_weekday: "{{ ['Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun', 'Mon'][seaweed_maint_index | int] }}"
+    _swfs_maint_args: >-
+      --weed {{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed --masters {{ seaweed_maint_masters }}
+      --node {{ seaweed_public_ip }}:{{ seaweed_http_port }}.{{ seaweed_grpc_port }} --index {{ seaweed_maint_index }}
+      --boxes {{ seaweed_maint_boxes }} --data {{ seaweed_data_dir }} --service seaweed-volume.service{{ ' --apply' if seaweed_maint_apply | bool else '' }}
+  block:
+    - name: swfs-maint index is a box of the ring
+      ansible.builtin.assert:
+        that: (seaweed_maint_index | int) >= 0 and (seaweed_maint_index | int) < 7
+    - name: swfs-maint script
+      ansible.builtin.copy:
+        src: swfs-maint.sh
+        dest: "{{ seaweed_base_dir }}/bin/swfs-maint.sh"
+        mode: "0700"
+    - name: swfs-maint service
+      ansible.builtin.template:
+        src: swfs-maint.service.j2
+        dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-maint.service"
+    - name: swfs-maint timer
+      ansible.builtin.template:
+        src: swfs-maint.timer.j2
+        dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-maint.timer"
+    - name: swfs-maint timer enabled and running (the service itself is only ever started by the timer)
+      ansible.builtin.systemd_service:
+        name: swfs-maint.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+        scope: user
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
 - name: Application buckets
   ansible.builtin.include_tasks: buckets.yml
   when: (seaweed_filer_enable | bool) and (seaweedfs_volume_start | bool) and (seaweed_s3_app_identities | length > 0)

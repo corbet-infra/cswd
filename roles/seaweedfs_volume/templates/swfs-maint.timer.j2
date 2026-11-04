@@ -1,0 +1,10 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-maint night of {{ inventory_hostname }} ({{ _swfs_maint_weekday }})
+
+[Timer]
+OnCalendar={{ _swfs_maint_weekday }} *-*-* {{ seaweed_maint_time }}
+Persistent=false
+
+[Install]
+WantedBy=timers.target

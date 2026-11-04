@@ -1,0 +1,15 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-maint ({{ inventory_hostname }}): EC scrub and cleanup of this box's shards{{ '' if seaweed_maint_apply | bool else ' (dry run)' }}
+
+[Service]
+Type=oneshot
+ExecStart={{ seaweed_base_dir }}/bin/swfs-maint.sh scrub {{ _swfs_maint_args }}
+ExecStart={{ seaweed_base_dir }}/bin/swfs-maint.sh cleanup {{ _swfs_maint_args }} --threshold {{ seaweed_maint_threshold }}
+TimeoutStartSec=8h
+UMask=0077
+Nice=19
+IOSchedulingClass=idle
+OOMScoreAdjust=900
+StandardOutput=append:{{ seaweed_log_dir }}/swfs-maint.log
+StandardError=append:{{ seaweed_log_dir }}/swfs-maint.log

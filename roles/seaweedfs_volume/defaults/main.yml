@@ -111,3 +111,14 @@ seaweed_health_enable: false
 seaweed_health_port: 0
 seaweed_health_cluster: false
 seaweed_health_peer_s3: ""      # comma separated https://host:port of every filer's S3 gateway
+
+# swfs-maint (box-local EC scrub and cleanup, files/swfs-maint.sh): a systemd user timer on the box, no ssh, no outside driver. One box
+# per night: the group sets seaweed_maint_index (0..boxes-1) and the timer fires on the weekday of that index (index 0 = Tuesday 02:00 ... index 6 = Monday 02:00,
+# the night of Monday evening to Tuesday as before). Dry-run unless seaweed_maint_apply.
+seaweed_maint_enable: false
+seaweed_maint_apply: false
+seaweed_maint_index: -1
+seaweed_maint_boxes: 7
+seaweed_maint_threshold: 0.3
+seaweed_maint_masters: "{{ seaweed_master }}"
+seaweed_maint_time: "02:00:00"

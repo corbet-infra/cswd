@@ -17,8 +17,8 @@ The role also ships two small stdlib-Python helpers, each optional and off by de
   `observe` only logs what it would do, `enforce` stops and starts the units. The upstream problem is described in
   `docs-draft-seaweedfs-issue.md`.
 * `swfs-health` - a health JSON per box over HTTPS with a required client certificate (RAM of the account, provider rootless
-  Docker inside the account, EC volumes with too few shards, filers in the ring, a write-via-one-filer / read-via-another probe),
-  for a monitoring system to poll.
+  Docker inside the account and the provider's Docker policy for it, EC volumes with too few shards, filers in the ring,
+  a write-via-one-filer / read-via-another probe), for a monitoring system to poll.
 
 ## Why SeaweedFS here
 

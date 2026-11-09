@@ -56,6 +56,25 @@ class HealthTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(sh.provider_docker_processes(root, uid=os.getuid()), (0, 0))
 
+    def test_provider_docker_policy_reads_the_root_store(self):
+        import json
+        import pwd
+        import tempfile
+        user = pwd.getpwuid(os.getuid()).pw_name
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, user + ".json")
+            with open(path, "w") as f:
+                json.dump({"dockerEnabled": True}, f)
+            self.assertIs(sh.provider_docker_policy(config_dir=root), True)
+            with open(path, "w") as f:
+                json.dump({"dockerEnabled": "false"}, f)
+            self.assertIs(sh.provider_docker_policy(config_dir=root), False)
+            with open(path, "w") as f:
+                json.dump({}, f)
+            self.assertIsNone(sh.provider_docker_policy(config_dir=root))
+            os.unlink(path)
+            self.assertIsNone(sh.provider_docker_policy(config_dir=root))
+
 
 if __name__ == "__main__":
     unittest.main()

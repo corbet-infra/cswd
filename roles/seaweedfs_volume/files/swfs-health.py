@@ -3,7 +3,8 @@
 """swfs-health: a tiny health endpoint per SeaweedFS box (python3 standard library only), polled by gatus.
 
 Every box serves GET /health.json on one assigned port: the RAM of the account (cgroup v1 working set = usage - inactive file cache,
-the account limit is 1250 MiB), the load, whether the provider's rootless Docker runs inside the account, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
+the account limit is 1250 MiB), the load, whether the provider's rootless Docker runs inside the account, the provider's Docker
+policy for the account, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
 --interval: the number of EC volumes with fewer than 14 shards (weed shell volume.list), the filers registered with the masters
 (cluster.ps), and a write-via-filer-A / read-via-filer-B probe over every pair partner (the S3 gateways), giving the largest time a
 marker object needed to become visible on a peer, or null when a peer did not answer. Run --cluster on two boxes so that the checks
@@ -75,6 +76,31 @@ def provider_docker_processes(proc_root="/proc", uid=None):
         except (OSError, ValueError):
             continue
     return count, round(rss_kib / 1024)
+
+
+def provider_docker_policy(uid=None, config_dir="/etc/seedbox/config/users"):
+    """The provider's dockerEnabled policy for this account: True, False, or None when unreadable.
+
+    PMSS keeps the authoritative value in the root-owned per-user store; ~/.config/pmss-user.json
+    is only a display copy. The store is world-readable, so the health endpoint can report the
+    policy even when the daemon is not running (a stopped daemon is not the same as an off policy:
+    the provider's five-minute cron starts it again while the policy says true).
+    """
+    uid = os.getuid() if uid is None else uid
+    try:
+        import pwd
+        user = pwd.getpwuid(uid).pw_name
+    except (ImportError, KeyError):
+        return None
+    try:
+        with open(os.path.join(config_dir, user + ".json")) as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        return None
+    value = payload.get("dockerEnabled")
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "off", "")
+    return None if value is None else bool(value)
 
 
 def cgroup_working_set_mib(uid):
@@ -163,8 +189,10 @@ def local_loop(state, uid, interval):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
         docker_pids, docker_mib = provider_docker_processes()
+        docker_policy = provider_docker_policy()
         state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, load1=os.getloadavg()[0],
-                  provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib)
+                  provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
+                  provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0))
         time.sleep(interval)
 
 

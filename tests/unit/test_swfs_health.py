@@ -32,6 +32,30 @@ class HealthTest(unittest.TestCase):
         import json
         self.assertEqual(json.loads(s.dump())["a"], 1)
 
+    def test_provider_docker_processes_counts_only_docker_and_mib(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            def pid(n, comm, cmdline, rss_kib):
+                d = os.path.join(root, str(n))
+                os.mkdir(d)
+                with open(os.path.join(d, "comm"), "w") as f:
+                    f.write(comm + "\n")
+                with open(os.path.join(d, "cmdline"), "wb") as f:
+                    f.write(cmdline.replace(" ", "\0").encode() + b"\0")
+                with open(os.path.join(d, "status"), "w") as f:
+                    f.write("Name:\t%s\nVmRSS:\t%d kB\n" % (comm, rss_kib))
+            pid(10, "dockerd", "dockerd", 20480)
+            pid(11, "bash", "bash -c sleep 1", 999999)
+            pid(12, "exe", "/proc/self/exe --state-dir=/run/user/1000/dockerd-rootless", 3072)
+            pid(13, "containerd", "/usr/bin/containerd --config /run/user/1000/docker/containerd/containerd.toml", 7168)
+            os.mkdir(os.path.join(root, "notapid"))
+            self.assertEqual(sh.provider_docker_processes(root, uid=os.getuid()), (3, 30))
+
+    def test_provider_docker_processes_empty(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(sh.provider_docker_processes(root, uid=os.getuid()), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

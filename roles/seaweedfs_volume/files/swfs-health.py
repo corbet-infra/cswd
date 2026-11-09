@@ -3,7 +3,7 @@
 """swfs-health: a tiny health endpoint per SeaweedFS box (python3 standard library only), polled by gatus.
 
 Every box serves GET /health.json on one assigned port: the RAM of the account (cgroup v1 working set = usage - inactive file cache,
-the account limit is 1250 MiB), the load, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
+the account limit is 1250 MiB), the load, whether the provider's rootless Docker runs inside the account, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
 --interval: the number of EC volumes with fewer than 14 shards (weed shell volume.list), the filers registered with the masters
 (cluster.ps), and a write-via-filer-A / read-via-filer-B probe over every pair partner (the S3 gateways), giving the largest time a
 marker object needed to become visible on a peer, or null when a peer did not answer. Run --cluster on two boxes so that the checks
@@ -37,6 +37,44 @@ def parse_filers(cluster_ps_text):
     """Number of filers registered with the masters (lines '  * ip:http.grpc (version) time' under '* filers N')."""
     m = re.search(r"^\* filers (\d+)", cluster_ps_text, re.M)
     return int(m.group(1)) if m else None
+
+
+def provider_docker_processes(proc_root="/proc", uid=None):
+    """Provider-owned rootless Docker processes inside this account: (count, summed RSS MiB).
+
+    Pulsed Media's root cron starts dockerd-rootless.sh as the account user, outside the user
+    systemd manager (no `systemctl --user` unit); the only switch is the root-owned account
+    store. The check therefore reports, it does not try to stop anything.
+    """
+    uid = os.getuid() if uid is None else uid
+    count = 0
+    rss_kib = 0
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return 0, 0
+    for name in entries:
+        if not name.isdigit():
+            continue
+        p = os.path.join(proc_root, name)
+        try:
+            if os.stat(p).st_uid != uid:
+                continue
+            with open(os.path.join(p, "comm")) as f:
+                comm = f.read().strip()
+            with open(os.path.join(p, "cmdline"), "rb") as f:
+                cmdline = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+            if comm not in ("dockerd", "containerd", "rootlesskit", "slirp4netns") and "dockerd-rootless" not in cmdline:
+                continue
+            count += 1
+            with open(os.path.join(p, "status")) as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_kib += int(line.split()[1])
+                        break
+        except (OSError, ValueError):
+            continue
+    return count, round(rss_kib / 1024)
 
 
 def cgroup_working_set_mib(uid):
@@ -124,7 +162,9 @@ def make_handler(state):
 def local_loop(state, uid, interval):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
-        state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, load1=os.getloadavg()[0])
+        docker_pids, docker_mib = provider_docker_processes()
+        state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, load1=os.getloadavg()[0],
+                  provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib)
         time.sleep(interval)
 
 

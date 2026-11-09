@@ -56,6 +56,31 @@ class HealthTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(sh.provider_docker_processes(root, uid=os.getuid()), (0, 0))
 
+    def test_s3_gateway_process_counts_fds_and_mib(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            def pid(n, comm, cmdline, rss_kib, swap_kib, fds):
+                d = os.path.join(root, str(n))
+                os.mkdir(d)
+                with open(os.path.join(d, "comm"), "w") as f:
+                    f.write(comm + "\n")
+                with open(os.path.join(d, "cmdline"), "wb") as f:
+                    f.write(cmdline.replace(" ", "\0").encode() + b"\0")
+                with open(os.path.join(d, "status"), "w") as f:
+                    f.write("Name:\t%s\nVmRSS:\t%d kB\nVmSwap:\t%d kB\n" % (comm, rss_kib, swap_kib))
+                os.mkdir(os.path.join(d, "fd"))
+                for i in range(fds):
+                    os.symlink("/dev/null", os.path.join(d, "fd", str(i)))
+            pid(20, "weed", "/home/u/cold/bin/weed-4.51/weed -logtostderr s3 -filer=1.2.3.4:1.2", 51200, 1024, 7)
+            pid(21, "weed", "/home/u/cold/bin/weed-4.51/weed -logtostderr volume -mserver=1.2.3.4:1", 999999, 0, 99)
+            pid(22, "python3", "python3 swfs-health.py --own-s3 https://1.2.3.4:1/health -filer=", 999999, 0, 99)
+            self.assertEqual(sh.s3_gateway_process(root, uid=os.getuid()), (7, 50, 1))
+
+    def test_s3_gateway_process_empty(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(sh.s3_gateway_process(root, uid=os.getuid()), (None, None, None))
+
     def test_provider_docker_policy_reads_the_root_store(self):
         import json
         import pwd

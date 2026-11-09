@@ -3,8 +3,9 @@
 """swfs-health: a tiny health endpoint per SeaweedFS box (python3 standard library only), polled by gatus.
 
 Every box serves GET /health.json on one assigned port: the RAM of the account (cgroup v1 working set = usage - inactive file cache,
-the account limit is 1250 MiB), the load, whether the provider's rootless Docker runs inside the account, the provider's Docker
-policy for the account, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
+the account limit is 1250 MiB), the load, the S3 gateway's open file descriptors / RSS / swap (the early warning for the
+aborted-PUT queue during a stalled volume server), whether the provider's rootless Docker runs inside the account, the provider's
+Docker policy for the account, and the age of the data. With --cluster the box also runs the cluster-wide checks once per
 --interval: the number of EC volumes with fewer than 14 shards (weed shell volume.list), the filers registered with the masters
 (cluster.ps), and a write-via-filer-A / read-via-filer-B probe over every pair partner (the S3 gateways), giving the largest time a
 marker object needed to become visible on a peer, or null when a peer did not answer. Run --cluster on two boxes so that the checks
@@ -103,6 +104,49 @@ def provider_docker_policy(uid=None, config_dir="/etc/seedbox/config/users"):
     return None if value is None else bool(value)
 
 
+def s3_gateway_process(proc_root="/proc", uid=None):
+    """The S3 gateway process of this account: (open fds, RSS MiB, swap MiB).
+
+    The gateway is `weed ... s3 -filer=...` under the same uid. Its fd count is
+    the early-warning number for the aborted-PUT pile-up: a gateway that queues
+    write handlers behind a stalled volume server accumulates one socket per
+    aborted request until the stall clears. RSS tracks the same queue, so both
+    are reported; nothing here alerts or acts on them.
+    """
+    uid = os.getuid() if uid is None else uid
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return None, None, None
+    for name in entries:
+        if not name.isdigit():
+            continue
+        p = os.path.join(proc_root, name)
+        try:
+            if os.stat(p).st_uid != uid:
+                continue
+            with open(os.path.join(p, "comm")) as f:
+                if f.read().strip() != "weed":
+                    continue
+            with open(os.path.join(p, "cmdline"), "rb") as f:
+                cmdline = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+            if " s3 " not in cmdline or "-filer=" not in cmdline:
+                continue
+            fds = len(os.listdir(os.path.join(p, "fd")))
+            rss_kib = 0
+            swap_kib = 0
+            with open(os.path.join(p, "status")) as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_kib = int(line.split()[1])
+                    elif line.startswith("VmSwap:"):
+                        swap_kib = int(line.split()[1])
+            return fds, round(rss_kib / 1024), round(swap_kib / 1024)
+        except (OSError, ValueError, IndexError):
+            continue
+    return None, None, None
+
+
 def cgroup_working_set_mib(uid):
     base = "/sys/fs/cgroup/memory/user.slice/user-%d.slice" % uid
     try:
@@ -190,9 +234,11 @@ def local_loop(state, uid, interval):
         ws, usage, limit = cgroup_working_set_mib(uid)
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
+        s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
         state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
-                  provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0))
+                  provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
+                  s3_fds=s3_fds, s3_rss_mib=s3_rss_mib, s3_swap_mib=s3_swap_mib)
         time.sleep(interval)
 
 

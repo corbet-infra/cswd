@@ -9,7 +9,11 @@ Docker policy for the account, and the age of the data. With --cluster the box a
 --interval: the number of EC volumes with fewer than 14 shards (weed shell volume.list), the filers registered with the masters
 (cluster.ps), and a write-via-filer-A / read-via-filer-B probe over every pair partner (the S3 gateways), giving the largest time a
 marker object needed to become visible on a peer, or null when a peer did not answer. Run --cluster on two boxes so that the checks
-survive the loss of one. Gatus turns the JSON into alerts; the weed shell needs the box's own
+survive the loss of one. The same loop asks the raft LEADER whether the write path exists at all (`cluster.status`: the data nodes it sees and its
+writable volumes): on 2026-11-12 a hung follower pinned every volume server, the leader saw 0 of 7 nodes, and every PUT failed while each box's GET
+check stayed green. Whatever fails the write path (marker PUT or DELETE refused, a peer that never shows the marker, a leader with missing nodes or no
+writable volume) is a line in `filer_peers_missing` and counts in `filer_peers_not_answering`; a loop that cannot run at all counts as failed too and
+no longer leaves the last good values standing. Gatus turns the JSON into alerts; the weed shell needs the box's own
 mutual-TLS security.toml, which is why this runs on the boxes and not on the monitoring side.
 """
 import argparse
@@ -179,8 +183,28 @@ def sigv4_curl(url, method, access, secret, body=None, timeout=15, cacert=None):
     return r.stdout.strip()
 
 
+def parse_cluster_status(text):
+    """(data nodes, writable volumes) the leader reports in `weed shell cluster.status` ('nodes:    7', '... 729 writable (99.18%) ...'); None when absent."""
+    nodes = re.search(r"^\s*nodes:\s+(\d+)", text, re.M)
+    writable = re.search(r"([\d,]+) writable", text)
+    return (int(nodes.group(1)) if nodes else None, int(writable.group(1).replace(",", "")) if writable else None)
+
+
+def write_path_problems(nodes, writable, expected_nodes):
+    """What the leader's view says is wrong with the write path (empty list = fine)."""
+    problems = []
+    if nodes is None or writable is None:
+        problems.append("leader topology unreadable (cluster.status)")
+        return problems
+    if nodes < expected_nodes:
+        problems.append("leader sees %d of %d data nodes" % (nodes, expected_nodes))
+    if writable == 0:
+        problems.append("leader has no writable volume")
+    return problems
+
+
 def lag_probe(own, peers, bucket, access, secret, cacert, limit=90):
-    """PUT a marker via `own`, poll HEAD on every peer until it is visible. Returns (max seconds, list of peers that never showed)."""
+    """PUT a marker via `own`, poll HEAD on every peer until it is visible, DELETE it. Returns (max seconds, list of what failed)."""
     key = "health/lag-%d" % int(time.time())
     t0 = time.time()
     if sigv4_curl("%s/%s/%s" % (own, bucket, key), "PUT", access, secret, body=key, cacert=cacert) != "200":
@@ -191,8 +215,10 @@ def lag_probe(own, peers, bucket, access, secret, cacert, limit=90):
             if p not in seen and sigv4_curl("%s/%s/%s" % (p, bucket, key), "HEAD", access, secret, cacert=cacert) == "200":
                 seen[p] = time.time() - t0
         time.sleep(1)
-    sigv4_curl("%s/%s/%s" % (own, bucket, key), "DELETE", access, secret, cacert=cacert)
+    deleted = sigv4_curl("%s/%s/%s" % (own, bucket, key), "DELETE", access, secret, cacert=cacert)
     missing = [p for p in peers if p not in seen]
+    if deleted not in ("200", "204"):
+        missing.append("own gateway did not delete the marker (HTTP %s)" % (deleted or "none"))
     return (round(max(seen.values()), 1) if seen else None), missing
 
 
@@ -242,6 +268,30 @@ def local_loop(state, uid, interval):
         time.sleep(interval)
 
 
+def cluster_check(state, a, access, secret, own, peers):
+    """One round of the cluster-wide checks. Any failure of the round itself is a failed check, not a reason to keep the previous result."""
+    try:
+        vl = weed_shell(a.weed, a.masters, ["volume.list"])
+        n_short, ids, n_ec = parse_ec_short(vl)
+        filers = None
+        for _ in range(4):  # the shell can list the filers a moment after it starts
+            filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
+            if filers:
+                break
+            time.sleep(3)
+        nodes, writable = parse_cluster_status(weed_shell(a.weed, a.masters, ["cluster.status"]))
+        lag, missing = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
+        missing = missing + write_path_problems(nodes, writable, a.expected_nodes or len(peers) + 1)
+        state.set(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, filer_lag_max_s=lag,
+                  topology_nodes=nodes, writable_volumes=writable,
+                  filer_peers_not_answering=len(missing), filer_peers_missing=missing, cluster_error=None,
+                  cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    except Exception as e:  # a check that cannot run counts as failed (a hung master makes the shell time out: exactly when the answer matters)
+        why = "cluster check failed: " + repr(e)[:160]
+        state.set(cluster_error=repr(e)[:200], filer_lag_max_s=None, topology_nodes=None, writable_volumes=None,
+                  filer_peers_not_answering=max(1, len(peers)), filer_peers_missing=[why])
+
+
 def cluster_loop(state, a):
     cfg = json.load(open(os.path.expanduser(a.s3_json)))
     ident = cfg["identities"][0]["credentials"][0]
@@ -249,20 +299,7 @@ def cluster_loop(state, a):
     own = a.own_s3
     peers = [p for p in a.peer_s3.split(",") if p and p != own]
     while True:
-        try:
-            vl = weed_shell(a.weed, a.masters, ["volume.list"])
-            n_short, ids, n_ec = parse_ec_short(vl)
-            filers = None
-            for _ in range(4):  # the shell can list the filers a moment after it starts
-                filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
-                if filers:
-                    break
-                time.sleep(3)
-            lag, missing = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
-            state.set(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, filer_lag_max_s=lag,
-                      filer_peers_not_answering=len(missing), filer_peers_missing=missing, cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-        except Exception as e:  # keep serving the last good values and say what failed
-            state.set(cluster_error=repr(e)[:200])
+        cluster_check(state, a, access, secret, own, peers)
         time.sleep(a.interval)
 
 
@@ -277,6 +314,7 @@ def main():
     p.add_argument("--own-s3")
     p.add_argument("--peer-s3", default="")
     p.add_argument("--bucket", default="health")
+    p.add_argument("--expected-nodes", type=int, default=0, help="data nodes the leader must see (default: the number of S3 gateways in --peer-s3)")
     p.add_argument("--cacert")
     p.add_argument("--tls-cert", help="serve HTTPS with this certificate and REQUIRE a client certificate signed by --cacert (anonymous requests fail)")
     p.add_argument("--tls-key")

@@ -100,6 +100,84 @@ class HealthTest(unittest.TestCase):
             os.unlink(path)
             self.assertIsNone(sh.provider_docker_policy(config_dir=root))
 
+CS = """
+cluster:
+\tid:       topo
+\tstatus:   LOCKED by 192.0.2.1
+\tnodes:    7
+\ttopology: 1 DC, 7 disks on 7 racks
+
+volumes:
+\ttotal:    362 volumes, 5 collections
+\tmax size: 2.1 GB
+\tregular:  354/1,050 volumes on 735 replicas, 1,729 writable (99.18%), 6 read-only (0.81%)
+"""
+EMPTY_CS = CS.replace("nodes:    7", "nodes:    0").replace("1,729 writable", "0 writable")
+
+
+class WritePathTest(unittest.TestCase):
+    def test_cluster_status_parse(self):
+        self.assertEqual(sh.parse_cluster_status(CS), (7, 1729))
+        self.assertEqual(sh.parse_cluster_status(EMPTY_CS), (0, 0))
+        self.assertEqual(sh.parse_cluster_status("error: no master"), (None, None))
+
+    def test_write_path_problems(self):
+        self.assertEqual(sh.write_path_problems(7, 729, 7), [])
+        self.assertEqual(sh.write_path_problems(0, 0, 7), ["leader sees 0 of 7 data nodes", "leader has no writable volume"])
+        self.assertEqual(sh.write_path_problems(6, 10, 7), ["leader sees 6 of 7 data nodes"])
+        self.assertEqual(len(sh.write_path_problems(None, None, 7)), 1)
+
+    def _args(self):
+        import argparse
+        return argparse.Namespace(weed="weed", masters="m", bucket="health", cacert=None, expected_nodes=0)
+
+    def _check(self, shell, probe):
+        orig = (sh.weed_shell, sh.lag_probe)
+        sh.weed_shell = shell
+        sh.lag_probe = probe
+        try:
+            state = sh.State()
+            peers = ["https://p%d" % i for i in range(6)]
+            sh.cluster_check(state, self._args(), "a", "s", "https://own", peers)
+            import json
+            return json.loads(state.dump())
+        finally:
+            sh.weed_shell, sh.lag_probe = orig
+
+    @staticmethod
+    def _shell_ok(weed, masters, commands, timeout=90):
+        if commands == ["cluster.status"]:
+            return CS
+        if commands == ["cluster.ps", "cluster.ps"]:
+            return "* filers 7\n"
+        return ""
+
+    def test_healthy_round_is_green_and_clears_an_old_error(self):
+        out = self._check(self._shell_ok, lambda *a, **k: (0.4, []))
+        self.assertEqual((out["filer_peers_not_answering"], out["topology_nodes"], out["writable_volumes"], out["cluster_error"]), (0, 7, 1729, None))
+
+    def test_leader_without_nodes_is_red_even_when_the_marker_got_through(self):
+        # the 2026-11-12 state seen from the leader: 0 of 7 nodes, 0 writable volumes
+        def shell(weed, masters, commands, timeout=90):
+            return EMPTY_CS if commands == ["cluster.status"] else self._shell_ok(weed, masters, commands)
+        out = self._check(shell, lambda *a, **k: (0.4, []))
+        self.assertEqual(out["filer_peers_not_answering"], 2)
+        self.assertIn("leader sees 0 of 7 data nodes", out["filer_peers_missing"])
+
+    def test_refused_marker_is_red(self):
+        out = self._check(self._shell_ok, lambda *a, **k: (None, ["own gateway did not accept the marker"]))
+        self.assertEqual(out["filer_peers_not_answering"], 1)
+
+    def test_a_check_that_cannot_run_is_red_and_drops_the_old_values(self):
+        import subprocess
+        def shell(weed, masters, commands, timeout=90):
+            raise subprocess.TimeoutExpired("weed", 90)
+        out = self._check(shell, lambda *a, **k: (0.4, []))
+        self.assertGreaterEqual(out["filer_peers_not_answering"], 1)
+        self.assertIn("cluster check failed", out["filer_peers_missing"][0])
+        self.assertIsNone(out["filer_lag_max_s"])
+        self.assertIsNone(out["topology_nodes"])
+
 
 if __name__ == "__main__":
     unittest.main()

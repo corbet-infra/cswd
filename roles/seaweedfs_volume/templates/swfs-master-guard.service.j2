@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-master-guard ({{ inventory_hostname }}): restarts this box's master when it is active for systemd and silent on /cluster/status
+After=seaweed-master.service
+
+[Service]
+ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-master-guard.py --unit seaweed-master.service --masters {{ seaweed_master_peers }} --self-ip {{ seaweed_public_ip }} --down {{ seaweed_master_guard_down_s }} --stagger {{ seaweed_master_guard_stagger_s }} --cooldown {{ seaweed_master_guard_cooldown_s }} --max-restarts {{ seaweed_master_guard_max_restarts }} --state {{ seaweed_base_dir }}/status/swfs-master-guard.json{% if not (seaweed_master_guard_act | bool) %} --observe{% endif %}
+
+Restart=always
+RestartSec=10
+UMask=0077
+OOMScoreAdjust=950
+StandardOutput=append:{{ seaweed_log_dir }}/master-guard.log
+StandardError=append:{{ seaweed_log_dir }}/master-guard.log
+
+[Install]
+WantedBy=default.target

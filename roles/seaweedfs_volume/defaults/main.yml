@@ -37,6 +37,10 @@ seaweed_master_enable: false
 seaweed_master_http_port: 0
 seaweed_master_grpc_port: 0
 seaweed_inventory_group: swfs       # group whose members may use the master HTTP admin API (whiteList)
+# Raft election timeout of the masters (weed default 10 s; followers wait a random 1-2x of it before they stand for election). On shared hosts a stalled
+# fsync or a CPU-starved process costs seconds; a follower that misses the leader's heartbeats for 10 s starts an election with a higher term and the healthy
+# leader steps down (no pre-vote), and every step-down unregisters the volume servers that were on the old leader's streams. "" keeps the weed default.
+seaweed_master_election_timeout: ""
 # Master HTTP admin handlers (/col/delete, /vol/grow, /vol/vacuum, /dir/assign, /dir/status ...) are open to everyone unless -whiteList is set.
 # Everything else (volume, filer, S3, health) is mTLS or signed; the cluster itself talks gRPC to the masters.
 seaweed_master_whitelist: "{{ (groups[seaweed_inventory_group] | map('extract', hostvars, 'ansible_host') | list + ['127.0.0.1']) | join(',') }}"
@@ -122,3 +126,13 @@ seaweed_maint_boxes: 7
 seaweed_maint_threshold: 0.3
 seaweed_maint_masters: "{{ seaweed_master }}"
 seaweed_maint_time: "02:00:00"
+
+# swfs-master-guard (2026-11-13): a master that is `active` for systemd and silent on /cluster/status is restarted by its own box (files/swfs-master-guard.py:
+# SIGQUIT so the goroutine dump reaches master.log, then Restart=always). The master that hung on 2026-11-12 pinned all volume servers for ten hours. Acts only
+# while enough OTHER masters answer (len//2 + 2, so a quorum is left and one more may be down), at most seaweed_master_guard_max_restarts per 24 h, one per cooldown.
+seaweed_master_guard_enable: false
+seaweed_master_guard_act: true            # false = log the decision, restart nothing
+seaweed_master_guard_down_s: 180          # silence before it may act
+seaweed_master_guard_stagger_s: 20        # plus this per index in the master list
+seaweed_master_guard_cooldown_s: 1800
+seaweed_master_guard_max_restarts: 3

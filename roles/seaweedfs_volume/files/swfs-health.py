@@ -224,11 +224,12 @@ def write_path_problems(nodes, writable, expected_nodes):
 
 
 def guarded_curl(url, method, access, secret, t0, limit, **kw):
-    """sigv4_curl, retried every 5 s while the gateway answers 503: that is its deliberate upload guard (2 slots / 32 MB) saying
-    "busy" while JuiceFS writes drain through a slow replica, which is load on the dirt tier, not a silent peer."""
+    """sigv4_curl for the marker write/delete: a 503 is the gateway's deliberate upload guard (2 slots / 32 MB) saying "busy", and no answer
+    within the timeout (000) is a replica write stalled on a starved provider disk; both are load on the dirt tier, not a silent peer.
+    Retry every 5 s inside the `limit` window, with a 60 s request timeout (the probe's own 15 s fired on every cld-5 stall)."""
     while True:
-        code = sigv4_curl(url, method, access, secret, **kw)
-        if code != "503" or time.time() - t0 >= limit:
+        code = sigv4_curl(url, method, access, secret, timeout=60, **kw)
+        if code not in ("503", "000", "") or time.time() - t0 >= limit:
             return code
         time.sleep(5)
 
@@ -251,7 +252,7 @@ def lag_probe(own, peers, bucket, access, secret, cacert, limit=90):
         time.sleep(1)
     deleted = guarded_curl("%s/%s/%s" % (own, bucket, key), "DELETE", access, secret, time.time(), 30, cacert=cacert)
     missing = [p for p in peers if p not in seen]
-    if deleted not in ("200", "204", "503"):
+    if deleted not in ("200", "204", "503", "000", ""):
         missing.append("own gateway did not delete the marker (HTTP %s)" % (deleted or "none"))
     return (round(max(seen.values()), 1) if seen else None), missing, None
 

@@ -153,26 +153,26 @@ class WritePathTest(unittest.TestCase):
         return ""
 
     def test_healthy_round_is_green_and_clears_an_old_error(self):
-        out = self._check(self._shell_ok, lambda *a, **k: (0.4, [], None))
+        out = self._check(self._shell_ok, lambda *a, **k: (0.4, [], None, 0.3))
         self.assertEqual((out["filer_peers_not_answering"], out["topology_nodes"], out["writable_volumes"], out["cluster_error"]), (0, 7, 1729, None))
 
     def test_leader_without_nodes_is_red_even_when_the_marker_got_through(self):
         # the 2026-11-12 state seen from the leader: 0 of 7 nodes, 0 writable volumes
         def shell(weed, masters, commands, timeout=90):
             return EMPTY_CS if commands == ["cluster.status"] else self._shell_ok(weed, masters, commands)
-        out = self._check(shell, lambda *a, **k: (0.4, [], None))
+        out = self._check(shell, lambda *a, **k: (0.4, [], None, 0.3))
         self.assertEqual(out["filer_peers_not_answering"], 2)
         self.assertIn("leader sees 0 of 7 data nodes", out["filer_peers_missing"])
 
     def test_refused_marker_is_red(self):
-        out = self._check(self._shell_ok, lambda *a, **k: (None, ["own gateway did not accept the marker"], None))
+        out = self._check(self._shell_ok, lambda *a, **k: (None, ["own gateway did not accept the marker"], None, 0.3))
         self.assertEqual(out["filer_peers_not_answering"], 1)
 
     def test_a_check_that_cannot_run_is_red_and_drops_the_old_values(self):
         import subprocess
         def shell(weed, masters, commands, timeout=90):
             raise subprocess.TimeoutExpired("weed", 90)
-        out = self._check(shell, lambda *a, **k: (0.4, [], None))
+        out = self._check(shell, lambda *a, **k: (0.4, [], None, 0.3))
         self.assertGreaterEqual(out["filer_peers_not_answering"], 1)
         self.assertIn("cluster check failed", out["filer_peers_missing"][0])
         self.assertIsNone(out["filer_lag_max_s"])
@@ -194,9 +194,22 @@ class GuardedCurlTest(unittest.TestCase):
         orig = sh.sigv4_curl
         sh.sigv4_curl = lambda *a, **k: "503"
         try:
-            self.assertEqual(sh.lag_probe("o", ["p"], "b", "a", "s", None, limit=0), (None, [], "own gateway busy (503 upload guard) for 0s"))
+            self.assertEqual(sh.lag_probe("o", ["p"], "b", "a", "s", None, limit=0), (None, [], "own gateway write refused (503 upload guard) for 0s", 0.0))
         finally:
             sh.sigv4_curl = orig
+
+
+class UnansweredWriteTest(unittest.TestCase):
+    def test_unanswered_write_ends_busy_not_peers(self):
+        orig = (sh.sigv4_curl, sh.time.sleep)
+        sh.sigv4_curl = lambda *a, **k: "000"
+        sh.time.sleep = lambda s: None
+        try:
+            lag, missing, busy, _ = sh.lag_probe("o", ["p"], "b", "a", "s", None, limit=0)
+        finally:
+            sh.sigv4_curl, sh.time.sleep = orig
+        self.assertEqual((lag, missing), (None, []))
+        self.assertIn("unanswered", busy)
 
 
 class PsiTest(unittest.TestCase):

@@ -199,5 +199,14 @@ class GuardedCurlTest(unittest.TestCase):
             sh.sigv4_curl = orig
 
 
+class PsiTest(unittest.TestCase):
+    def test_host_psi_reads_some_avg60(self):
+        import tempfile, os
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "memory"), "w").write("some avg10=0.46 avg60=0.79 avg300=1.55 total=1\nfull avg10=0.45 avg60=0.66 avg300=1.25 total=1\n")
+        self.assertEqual(sh.host_psi("memory", d), 0.79)
+        self.assertIsNone(sh.host_psi("io", d))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -165,6 +165,26 @@ def cgroup_working_set_mib(uid):
         return None, None, None
 
 
+def cgroup_failcnt(uid):
+    """Times the account hit its memory limit and had to reclaim (cgroup v1 memory.failcnt, a counter): the in-account pressure signal.
+    The limit is the backstop; a rate above zero in normal operation means the configured budgets no longer fit."""
+    try:
+        return int(open("/sys/fs/cgroup/memory/user.slice/user-%d.slice/memory.failcnt" % uid).read())
+    except (OSError, ValueError):
+        return None
+
+
+def host_psi(kind, path="/proc/pressure"):
+    """avg60 of the host-wide PSI 'some' line for memory or io (the box is a slice of a shared host: this is the neighbourhood, not the account)."""
+    try:
+        for line in open("%s/%s" % (path, kind)):
+            if line.startswith("some "):
+                return float(dict(kv.split("=") for kv in line.split()[1:])["avg60"])
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
 def weed_shell(weed, masters, commands, timeout=90):
     p = subprocess.run([weed, "shell", "-master=" + masters], input="\n".join(commands) + "\n", capture_output=True, text=True, timeout=timeout)
     return p.stdout
@@ -275,7 +295,7 @@ def local_loop(state, uid, interval):
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
-        state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, load1=os.getloadavg()[0],
+        state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
                   s3_fds=s3_fds, s3_rss_mib=s3_rss_mib, s3_swap_mib=s3_swap_mib)

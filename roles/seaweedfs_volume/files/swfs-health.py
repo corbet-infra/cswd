@@ -203,23 +203,37 @@ def write_path_problems(nodes, writable, expected_nodes):
     return problems
 
 
+def guarded_curl(url, method, access, secret, t0, limit, **kw):
+    """sigv4_curl, retried every 5 s while the gateway answers 503: that is its deliberate upload guard (2 slots / 32 MB) saying
+    "busy" while JuiceFS writes drain through a slow replica, which is load on the dirt tier, not a silent peer."""
+    while True:
+        code = sigv4_curl(url, method, access, secret, **kw)
+        if code != "503" or time.time() - t0 >= limit:
+            return code
+        time.sleep(5)
+
+
 def lag_probe(own, peers, bucket, access, secret, cacert, limit=90):
-    """PUT a marker via `own`, poll HEAD on every peer until it is visible, DELETE it. Returns (max seconds, list of what failed)."""
+    """PUT a marker via `own`, poll HEAD on every peer until it is visible, DELETE it.
+    Returns (max seconds, list of what failed, busy reason or None); a gateway still busy after `limit` is reported as busy, not as a failure."""
     key = "health/lag-%d" % int(time.time())
     t0 = time.time()
-    if sigv4_curl("%s/%s/%s" % (own, bucket, key), "PUT", access, secret, body=key, cacert=cacert) != "200":
-        return None, ["own gateway did not accept the marker"]
+    code = guarded_curl("%s/%s/%s" % (own, bucket, key), "PUT", access, secret, t0, limit, body=key, cacert=cacert)
+    if code == "503":
+        return None, [], "own gateway busy (503 upload guard) for %ds" % limit
+    if code != "200":
+        return None, ["own gateway did not accept the marker (HTTP %s)" % (code or "none")], None
     seen = {}
     while time.time() - t0 < limit and len(seen) < len(peers):
         for p in peers:
             if p not in seen and sigv4_curl("%s/%s/%s" % (p, bucket, key), "HEAD", access, secret, cacert=cacert) == "200":
                 seen[p] = time.time() - t0
         time.sleep(1)
-    deleted = sigv4_curl("%s/%s/%s" % (own, bucket, key), "DELETE", access, secret, cacert=cacert)
+    deleted = guarded_curl("%s/%s/%s" % (own, bucket, key), "DELETE", access, secret, time.time(), 30, cacert=cacert)
     missing = [p for p in peers if p not in seen]
-    if deleted not in ("200", "204"):
+    if deleted not in ("200", "204", "503"):
         missing.append("own gateway did not delete the marker (HTTP %s)" % (deleted or "none"))
-    return (round(max(seen.values()), 1) if seen else None), missing
+    return (round(max(seen.values()), 1) if seen else None), missing, None
 
 
 class State:
@@ -280,11 +294,11 @@ def cluster_check(state, a, access, secret, own, peers):
                 break
             time.sleep(3)
         nodes, writable = parse_cluster_status(weed_shell(a.weed, a.masters, ["cluster.status"]))
-        lag, missing = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
+        lag, missing, busy = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
         missing = missing + write_path_problems(nodes, writable, a.expected_nodes or len(peers) + 1)
         state.set(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, filer_lag_max_s=lag,
                   topology_nodes=nodes, writable_volumes=writable,
-                  filer_peers_not_answering=len(missing), filer_peers_missing=missing, cluster_error=None,
+                  filer_peers_not_answering=len(missing), filer_peers_missing=missing, own_gateway_busy=1 if busy else 0, own_gateway_busy_reason=busy, cluster_error=None,
                   cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     except Exception as e:  # a check that cannot run counts as failed (a hung master makes the shell time out: exactly when the answer matters)
         why = "cluster check failed: " + repr(e)[:160]

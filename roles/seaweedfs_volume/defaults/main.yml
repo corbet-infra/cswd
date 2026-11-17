@@ -136,3 +136,9 @@ seaweed_master_guard_down_s: 180          # silence before it may act
 seaweed_master_guard_stagger_s: 20        # plus this per index in the master list
 seaweed_master_guard_cooldown_s: 1800
 seaweed_master_guard_max_restarts: 3
+
+# swfs-docker-guard: the provider's root cron starts rootless Docker in the account (dockerEnabled=true, 27-103 MiB of the 1250 MiB limit). A user path unit
+# (inotify on the runtime files, no polling) starts a one-shot that stops exactly that uid's Docker process tree. Nothing of the provider's install is touched.
+# act=false only logs what it would stop (OBSERVE). The provider's 5-minute cron starts Docker again until the account setting is switched off.
+seaweed_docker_guard_enable: false
+seaweed_docker_guard_act: false

@@ -1,0 +1,15 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-docker-guard ({{ inventory_hostname }}): stops the provider's rootless Docker of this account (started by swfs-docker-guard.path)
+# many Docker files appear in a burst; this is a cheap one-shot, so never rate-limit the path unit's trigger
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-docker-guard.py{% if not (seaweed_docker_guard_act | bool) %} --observe{% endif %}
+
+UMask=0077
+Nice=10
+OOMScoreAdjust=950
+StandardOutput=append:{{ seaweed_log_dir }}/docker-guard.log
+StandardError=append:{{ seaweed_log_dir }}/docker-guard.log

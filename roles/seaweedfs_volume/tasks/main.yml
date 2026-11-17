@@ -313,6 +313,43 @@
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
+- name: swfs-docker-guard (keeps the provider's rootless Docker from running)
+  when: seaweed_docker_guard_enable | bool
+  block:
+    - name: swfs-docker-guard script
+      ansible.builtin.copy:
+        src: swfs-docker-guard.py
+        dest: "{{ seaweed_base_dir }}/bin/swfs-docker-guard.py"
+        mode: "0700"
+      register: seaweed_dg_script
+    - name: swfs-docker-guard service and path units
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/{{ item }}"
+      loop:
+        - swfs-docker-guard.service
+        - swfs-docker-guard.path
+      register: seaweed_dg_units
+    - name: swfs-docker-guard.path enabled and watching (the service is only ever started by the path)
+      ansible.builtin.systemd_service:
+        name: swfs-docker-guard.path
+        daemon_reload: true
+        enabled: true
+        state: "{{ 'restarted' if (seaweed_dg_script is changed or seaweed_dg_units is changed) else 'started' }}"
+        scope: user
+      # in check mode the unit files of a first install do not exist yet
+      ignore_errors: "{{ ansible_check_mode }}"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+    - name: swfs-docker-guard runs once now (a Docker that is already running creates no new files for the path unit to see)
+      ansible.builtin.systemd_service:
+        name: swfs-docker-guard.service
+        state: started
+        scope: user
+      ignore_errors: "{{ ansible_check_mode }}"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
 - name: Application buckets
   ansible.builtin.include_tasks: buckets.yml
   when: (seaweed_filer_enable | bool) and (seaweedfs_volume_start | bool) and (seaweed_s3_app_identities | length > 0)

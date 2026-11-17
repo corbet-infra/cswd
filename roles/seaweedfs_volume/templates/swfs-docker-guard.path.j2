@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: LGPL-3.0-or-later #}
+[Unit]
+Description=swfs-docker-guard ({{ inventory_hostname }}): the provider's rootless Docker created its runtime files
+
+[Path]
+# inotify, no polling: dockerd-rootless.sh creates the rootlesskit state directory and then docker.pid / docker.sock in the account's runtime directory
+PathChanged=%t/dockerd-rootless
+PathChanged=%t/docker.pid
+PathChanged=%t/docker.sock
+Unit=swfs-docker-guard.service
+
+[Install]
+WantedBy=default.target

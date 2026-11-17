@@ -7,7 +7,8 @@ After=seaweed-filer.service
 Type=simple
 Environment=HOME={{ ansible_facts['user_dir'] }}
 Environment=GOMEMLIMIT={{ seaweed_gomemlimit_s3 }}
-ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr s3 \
+{% if seaweed_limitdata_s3 | string | length > 0 %}LimitDATA={{ seaweed_limitdata_s3 }}
+{% endif %}ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr s3 \
   -filer={{ seaweed_public_ip }}:{{ seaweed_filer_http_port }}.{{ seaweed_filer_grpc_port }} -ip.bind=0.0.0.0 \
   -port=0 -port.https={{ seaweed_s3_https_port }} -port.grpc={{ seaweed_s3_grpc_port }} -port.iceberg=0 -port.lance=0 \
   -cert.file={{ seaweed_tls_dir }}/cert.pem -key.file={{ seaweed_tls_dir }}/key.pem -config={{ ansible_facts['user_dir'] }}/.seaweedfs/s3.json \

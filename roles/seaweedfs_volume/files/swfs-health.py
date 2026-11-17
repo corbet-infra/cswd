@@ -295,13 +295,136 @@ def make_handler(state):
     return H
 
 
-def local_loop(state, uid, interval):
+def cgroup_anon_cache_mib(uid):
+    """(anon, cache) MiB of the account from memory.stat: anon = total_rss + total_rss_huge (what cannot be reclaimed), cache = total_cache (reclaimable).
+    ram_ws_mib mixes the two; the 900 MiB line is about the anon part."""
+    try:
+        rss = huge = cache = 0
+        for line in open("/sys/fs/cgroup/memory/user.slice/user-%d.slice/memory.stat" % uid):
+            k, _, v = line.partition(" ")
+            if k == "total_rss":
+                rss = int(v)
+            elif k == "total_rss_huge":
+                huge = int(v)
+            elif k == "total_cache":
+                cache = int(v)
+        return round((rss + huge) / 1048576), round(cache / 1048576)
+    except (OSError, ValueError):
+        return None, None
+
+
+UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
+DOCKER_COMMS = ("dockerd", "containerd", "rootlesskit", "slirp4netns")
+
+
+def classify_process(comm, cmdline):
+    """The unit name a process of this account belongs to, or None. Exact, from comm and the command line."""
+    if comm == "weed":
+        for tok in cmdline.split()[1:]:
+            if not tok.startswith("-"):
+                return "weed-" + tok if tok in ("master", "volume", "filer", "s3") else None
+        return None
+    if comm.startswith("otelcol"):
+        return "otelcol"
+    if comm == "node_exporter":
+        return "node_exporter"
+    if comm in ("python3", "python") and "/bin/swfs-" in cmdline:
+        return "swfs-health"
+    if "radar-collector" in cmdline or comm == "radar-collector":
+        return "radar"
+    if comm in ("lighttpd", "php-cgi"):
+        return "panel"
+    if comm in DOCKER_COMMS or "dockerd-rootless" in cmdline:
+        return "docker"
+    return None
+
+
+def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None):
+    """[{unit, rss_mib, budget_mib}] for every name in UNIT_NAMES (0 when it does not run). The radar unit adds the children of its collector
+    (a curl per fetch) and the size of its tmpfs spool; docker counts the whole rootless tree."""
+    uid = os.getuid() if uid is None else uid
+    budgets = budgets or {}
+    rss = {n: 0 for n in UNIT_NAMES}
+    procs = {}
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        entries = []
+    for name in entries:
+        if not name.isdigit():
+            continue
+        p = os.path.join(proc_root, name)
+        try:
+            if os.stat(p).st_uid != uid:
+                continue
+            with open(os.path.join(p, "stat")) as f:
+                st = f.read()
+            ppid = int(st[st.rindex(")") + 2:].split()[1])
+            comm = st[st.index("(") + 1:st.rindex(")")]
+            with open(os.path.join(p, "cmdline"), "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            kib = 0
+            with open(os.path.join(p, "status")) as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        kib = int(line.split()[1])
+                        break
+            procs[int(name)] = (ppid, comm, cmd, kib)
+        except (OSError, ValueError, IndexError):
+            continue
+    unit_of = {pid: classify_process(c, m) for pid, (_pp, c, m, _k) in procs.items()}
+    for pid, (ppid, _c, _m, kib) in procs.items():
+        u = unit_of[pid]
+        if u is None:  # a child of a radar collector (curl per fetch) counts for radar
+            a = ppid
+            seen = 0
+            while a in procs and seen < 8:
+                if unit_of.get(a) == "radar":
+                    u = "radar"
+                    break
+                a = procs[a][0]
+                seen += 1
+        if u:
+            rss[u] += kib
+    out = []
+    for n in UNIT_NAMES:
+        mib = rss[n] / 1024.0
+        if n == "radar" and spool_glob:
+            import glob
+            for path in glob.glob(spool_glob):
+                try:
+                    if os.path.isdir(path):
+                        for r, _d, fs in os.walk(path):
+                            mib += sum(os.path.getsize(os.path.join(r, f)) for f in fs if os.path.exists(os.path.join(r, f))) / 1048576.0
+                    else:
+                        mib += os.path.getsize(path) / 1048576.0
+                except OSError:
+                    pass
+        out.append({"unit": n, "rss_mib": round(mib, 1), "budget_mib": budgets.get(n, 0)})
+    return out
+
+
+def load_budgets(path):
+    """The one declared budget file ({unit: MiB}); {} when absent or broken."""
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return {k: v for k, v in d.items() if isinstance(v, (int, float))}
+    except (OSError, ValueError):
+        return {}
+
+
+def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
+        anon, cache = cgroup_anon_cache_mib(uid)
+        units = unit_rows(uid=uid, budgets=load_budgets(budgets_path), spool_glob="/run/user/%d/radar-collector*" % uid)
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
-        state.set(ram_ws_mib=ws, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
+        state.set(ram_ws_mib=ws, ram_anon_mib=anon, ram_cache_mib=cache, units=units, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
                   s3_fds=s3_fds, s3_rss_mib=s3_rss_mib, s3_swap_mib=s3_swap_mib)
@@ -347,6 +470,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--interval", type=float, default=60)
+    p.add_argument("--budgets", help="JSON {unit: MiB}, the one declared RAM budget file; the units array reports each unit's RSS against it")
     p.add_argument("--cluster", action="store_true")
     p.add_argument("--weed")
     p.add_argument("--masters")
@@ -360,7 +484,7 @@ def main():
     p.add_argument("--tls-key")
     a = p.parse_args()
     state = State()
-    threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval), daemon=True).start()
+    threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval, a.budgets), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()
     server = HTTPServer(("0.0.0.0", a.port), make_handler(state))

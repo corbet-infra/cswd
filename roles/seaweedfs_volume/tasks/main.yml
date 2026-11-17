@@ -255,6 +255,17 @@
 - name: swfs-health (health JSON for gatus)
   when: seaweed_health_enable | bool
   block:
+    - name: swfs-health etc directory and the declared unit budgets
+      ansible.builtin.file:
+        path: "{{ seaweed_base_dir }}/etc"
+        state: directory
+        mode: "0700"
+    - name: unit budgets file (the one declared RAM budget per unit)
+      ansible.builtin.copy:
+        content: "{{ seaweed_unit_budgets_mib | to_nice_json }}\n"
+        dest: "{{ seaweed_unit_budgets_file }}"
+        mode: "0600"
+      register: seaweed_h_budgets
     - name: swfs-health script
       ansible.builtin.copy:
         src: swfs-health.py
@@ -271,7 +282,7 @@
         name: swfs-health.service
         daemon_reload: true
         enabled: true
-        state: "{{ ('restarted' if (seaweed_h_script is changed or seaweed_h_unit is changed) else 'started') if (seaweedfs_volume_start | bool) else omit }}"
+        state: "{{ ('restarted' if (seaweed_h_script is changed or seaweed_h_unit is changed or seaweed_h_budgets is changed) else 'started') if (seaweedfs_volume_start | bool) else omit }}"
         scope: user
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
@@ -316,6 +327,28 @@
 - name: swfs-docker-guard (keeps the provider's rootless Docker from running)
   when: seaweed_docker_guard_enable | bool
   block:
+    - name: the provider's daemon.json kept as daemon.json.provider (once), then replaced by a line that makes dockerd refuse to start
+      when: seaweed_docker_neutralize_daemon_json | bool
+      block:
+        - name: look at the current daemon.json
+          ansible.builtin.slurp:
+            src: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+          register: seaweed_dj_current
+          failed_when: false
+        - name: keep the provider's original (only if it is not already the notice)
+          ansible.builtin.copy:
+            src: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+            dest: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json.provider"
+            remote_src: true
+            mode: "0600"
+            force: false
+          when: seaweed_dj_current.content is defined and not ((seaweed_dj_current.content | b64decode).startswith('# disabled by the account holder'))
+        - name: daemon.json says why Docker does not start (invalid JSON on purpose)
+          ansible.builtin.copy:
+            content: "# disabled by the account holder: Docker is not used in this account (support ticket #013678). The provider's original is daemon.json.provider.\n"
+            dest: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+            mode: "0600"
+          when: seaweed_dj_current.content is defined
     - name: swfs-docker-guard script
       ansible.builtin.copy:
         src: swfs-docker-guard.py

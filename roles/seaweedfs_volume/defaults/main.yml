@@ -142,3 +142,29 @@ seaweed_master_guard_max_restarts: 3
 # act=false only logs what it would stop (OBSERVE). The provider's 5-minute cron starts Docker again until the account setting is switched off.
 seaweed_docker_guard_enable: false
 seaweed_docker_guard_act: false
+
+# Hard cap on the data segment of each weed process (RLIMIT_DATA via LimitDATA=, unprivileged, no cgroup needed). It is a RUNAWAY STOP, never an RSS cap: a Go process
+# reserves 2.3-3x its resident size in VmData (cld-6, 2026-11-17: master 101/36, volume 344/100, filer 473/190, s3 183/75 MiB VmData/RSS). When the limit is hit the Go runtime
+# aborts and systemd restarts the unit. Empty = no limit. Values are measured VmData + 20-25 %.
+seaweed_limitdata_master: ""
+seaweed_limitdata_volume: ""
+seaweed_limitdata_filer: ""
+seaweed_limitdata_s3: ""
+
+# The ONE declared RAM budget per unit (MiB), read by swfs-health (swfs_health_unit_rss_mib / _budget_mib) and nothing else decides it. Aim of the account: ram_ws never above 900 MiB.
+seaweed_unit_budgets_mib:
+  weed-master: 80
+  weed-volume: 200
+  weed-filer: 200
+  weed-s3: 140
+  otelcol: 30
+  node_exporter: 15
+  swfs-health: 30
+  radar: 20
+  panel: 0
+  docker: 0
+seaweed_unit_budgets_file: "{{ seaweed_base_dir }}/etc/unit-budgets.json"
+
+# The provider's rootless Docker: besides stopping it (swfs-docker-guard), make dockerd refuse to start at all by putting a text line (invalid JSON) into the account's own
+# ~/.config/docker/daemon.json, so a cron start fails at config parse in milliseconds. The provider's original is kept next to it as daemon.json.provider. Off by default.
+seaweed_docker_neutralize_daemon_json: false

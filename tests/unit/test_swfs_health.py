@@ -221,5 +221,49 @@ class PsiTest(unittest.TestCase):
         self.assertIsNone(sh.host_psi("io", d))
 
 
+class UnitRowsTest(unittest.TestCase):
+    def _proc(self, root, pid, ppid, comm, cmd, kib, uid=None):
+        import os
+        d = os.path.join(root, str(pid))
+        os.makedirs(d)
+        open(os.path.join(d, "stat"), "w").write("%d (%s) S %d 0 0 0\n" % (pid, comm, ppid))
+        open(os.path.join(d, "cmdline"), "wb").write(cmd.replace(" ", "\0").encode())
+        open(os.path.join(d, "status"), "w").write("VmRSS:\t%d kB\n" % kib)
+
+    def test_classify(self):
+        c = sh.classify_process
+        self.assertEqual(c("weed", "/x/weed -logtostderr filer -port=1"), "weed-filer")
+        self.assertEqual(c("weed", "/x/weed -logtostderr s3 -filer=a"), "weed-s3")
+        self.assertEqual(c("otelcol-corbet", "otelcol-corbet --config=x"), "otelcol")
+        self.assertEqual(c("python3", "/usr/bin/python3 /h/cold/bin/swfs-master-guard.py"), "swfs-health")
+        self.assertEqual(c("php-cgi", "/usr/bin/php-cgi -c x"), "panel")
+        self.assertEqual(c("exe", "/proc/self/exe --state-dir=/run/user/1/dockerd-rootless"), "docker")
+        self.assertIsNone(c("bash", "bash -s"))
+
+    def test_rows_sum_children_of_radar_and_report_zero_for_absent_units(self):
+        import os, tempfile
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as root:
+            self._proc(root, 10, 1, "weed", "/x/weed -logtostderr master", 36 * 1024)
+            self._proc(root, 20, 1, "python3", "/usr/bin/python3 /h/radar-collector.py", 8 * 1024)
+            self._proc(root, 21, 20, "curl", "curl https://x", 6 * 1024)
+            self._proc(root, 30, 1, "bash", "bash", 3 * 1024)
+            rows = {r["unit"]: r for r in sh.unit_rows(root, uid, {"weed-master": 80, "radar": 20})}
+        self.assertEqual(rows["weed-master"], {"unit": "weed-master", "rss_mib": 36.0, "budget_mib": 80})
+        self.assertEqual(rows["radar"]["rss_mib"], 14.0)
+        self.assertEqual(rows["radar"]["budget_mib"], 20)
+        self.assertEqual(rows["docker"]["rss_mib"], 0)
+        self.assertEqual(rows["panel"]["budget_mib"], 0)
+        self.assertEqual(len(rows), len(sh.UNIT_NAMES))
+
+    def test_budgets_file(self):
+        import os, tempfile
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "b.json")
+        open(p, "w").write('{"weed-filer": 200, "note": "x"}')
+        self.assertEqual(sh.load_budgets(p), {"weed-filer": 200})
+        self.assertEqual(sh.load_budgets(os.path.join(d, "none")), {})
+
+
 if __name__ == "__main__":
     unittest.main()

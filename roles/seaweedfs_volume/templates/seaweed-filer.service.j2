@@ -6,7 +6,8 @@ Description=SeaweedFS filer with S3 gateway ({{ inventory_hostname }})
 Type=simple
 Environment=HOME={{ ansible_facts['user_dir'] }}
 Environment=GOMEMLIMIT={{ seaweed_gomemlimit_filer }}
-{% if seaweed_limitdata_filer | string | length > 0 %}LimitDATA={{ seaweed_limitdata_filer }}
+{% if seaweed_filer_gctrace | bool %}Environment=GODEBUG=gctrace=1
+{% endif %}{% if seaweed_limitdata_filer | string | length > 0 %}LimitDATA={{ seaweed_limitdata_filer }}
 {% endif %}WorkingDirectory={{ seaweed_base_dir }}/data/seaweed-filer
 ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr filer \
   -ip={{ seaweed_public_ip }} -ip.bind=0.0.0.0 -port={{ seaweed_filer_http_port }} -port.grpc={{ seaweed_filer_grpc_port }} \

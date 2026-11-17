@@ -168,3 +168,7 @@ seaweed_unit_budgets_file: "{{ seaweed_base_dir }}/etc/unit-budgets.json"
 # The provider's rootless Docker: besides stopping it (swfs-docker-guard), make dockerd refuse to start at all by putting a text line (invalid JSON) into the account's own
 # ~/.config/docker/daemon.json, so a cron start fails at config parse in milliseconds. The provider's original is kept next to it as daemon.json.provider. Off by default.
 seaweed_docker_neutralize_daemon_json: false
+
+# Measurement only: GODEBUG=gctrace=1 makes the filer log one line per garbage collection to its journal (with the GC's share of CPU), to see whether a low GOMEMLIMIT makes the GC run
+# nonstop. Off by default; remove after the canary.
+seaweed_filer_gctrace: false

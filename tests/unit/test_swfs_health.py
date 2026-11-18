@@ -337,11 +337,13 @@ class CacheGovernorTest(unittest.TestCase):
             advised.append(p)
             level["u"] -= 30.0
         lines = []
-        n, freed = sh.trim_once(d, 0, 900, 850, 600, now=now, usage=usage, advise=advise, log=lines.append)
+        n, freed, wall, cpu = sh.trim_once(d, 0, 900, 850, 600, now=now, usage=usage, advise=advise, log=lines.append)
+        self.assertGreaterEqual(wall, 0.0)
+        self.assertGreaterEqual(cpu, 0.0)
         self.assertEqual(n, 4)  # 950 -> 920 -> 890 -> 860 -> 830 (< 850) stops after the fourth
         self.assertEqual(freed, 120.0)
         self.assertEqual(len(lines), 1)
-        self.assertEqual(sh.trim_once(d, 0, 900, 850, 600, now=now, usage=lambda _u: 800.0, advise=advise, log=lines.append), (0, 0.0))
+        self.assertEqual(sh.trim_once(d, 0, 900, 850, 600, now=now, usage=lambda _u: 800.0, advise=advise, log=lines.append), (0, 0.0, 0.0, 0.0))
 
 
 if __name__ == "__main__":

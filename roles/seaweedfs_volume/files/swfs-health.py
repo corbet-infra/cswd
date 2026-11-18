@@ -23,6 +23,7 @@ import os
 import re
 import ssl
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -522,13 +523,17 @@ def stat_is_regular(st):
     return _stat.S_ISREG(st.st_mode)
 
 
-def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgroup_usage_mib, advise=None, log=print):
+def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgroup_usage_mib, advise=None, log=None):
     """When the account's charged usage is above high_mib, drop the clean page cache of volume files (posix_fadvise DONTNEED), coldest first, until usage
-    is below low_mib. Returns (files_advised, freed_mib) with freed measured as the usage drop. One log line per trim."""
+    is below low_mib. Returns (files_advised, freed_mib, wall_s, cpu_s); freed is the usage drop, wall_s/cpu_s the cost of the pass itself.
+    One log line per trim, on stderr (health.log), since stdout goes to a journal nobody can read."""
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
     u0 = usage(uid)
     if u0 is None or u0 <= high_mib:
-        return 0, 0.0
+        return 0, 0.0, 0.0, 0.0
     advise = advise or (lambda path: _advise_dontneed(path))
+    t0 = time.perf_counter()
+    c0 = time.process_time()
     n = 0
     for path in trim_candidates(data_dir, time.time() if now is None else now, min_age_s):
         advise(path)
@@ -538,8 +543,10 @@ def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgrou
             break
     u1 = usage(uid)
     freed = max(0.0, u0 - (u1 if u1 is not None else u0))
-    log("swfs-health: cache trim: usage %.0f -> %.0f MiB (high %d, low %d), %d volume files advised, %.0f MiB freed" % (u0, u1 if u1 is not None else -1, high_mib, low_mib, n, freed))
-    return n, freed
+    wall = time.perf_counter() - t0
+    cpu = time.process_time() - c0
+    log("swfs-health: cache trim: usage %.0f -> %.0f MiB (high %d, low %d), %d volume files advised, %.0f MiB freed, %.3f s wall, %.3f s cpu" % (u0, u1 if u1 is not None else -1, high_mib, low_mib, n, freed, wall, cpu))
+    return n, freed, wall, cpu
 
 
 def _advise_dontneed(path):
@@ -556,12 +563,16 @@ def _advise_dontneed(path):
 def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0):
     trims = 0
     freed_total = 0.0
+    wall_total = 0.0
+    cpu_total = 0.0
     while True:
-        n, freed = trim_once(data_dir, uid, high_mib, low_mib, min_age_s)
+        n, freed, wall, cpu = trim_once(data_dir, uid, high_mib, low_mib, min_age_s)
         if n:
             trims += 1
             freed_total += freed
-        state.set(cache_trims=trims, cache_trim_freed_mib=round(freed_total), cache_trim_enabled=1)
+            wall_total += wall
+            cpu_total += cpu
+        state.set(cache_trims=trims, cache_trim_freed_mib=round(freed_total), cache_trim_seconds=round(wall_total, 3), cache_trim_cpu_seconds=round(cpu_total, 3), cache_trim_enabled=1)
         time.sleep(interval)
 
 

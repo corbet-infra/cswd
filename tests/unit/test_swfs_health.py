@@ -383,7 +383,7 @@ class TrimCadenceTest(unittest.TestCase):
         self.assertEqual(sh.trim_wait(None, 0.03, 800, 5, 30), 30)  # unreadable usage
 
     def test_a_slow_pass_backs_off_ten_times_its_duration(self):
-        self.assertEqual(sh.trim_wait(900, 1.5, 800, 5, 30), 30)   # 10 x 1.5 = 15 < 30
+        self.assertEqual(sh.trim_wait(900, 1.5, 800, 5, 30), 15)   # fast 5 s, but 10 x 1.5 s = 15 s wins
         self.assertEqual(sh.trim_wait(900, 4.0, 800, 5, 30), 40)
         self.assertEqual(sh.trim_wait(900, 0.9, 800, 5, 30), 5)    # under 1 s: no back-off
 

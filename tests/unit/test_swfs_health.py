@@ -375,5 +375,18 @@ class LdbGovernorTest(unittest.TestCase):
         self.assertEqual([os.path.basename(p) for p in seen], ["a_1.dat", "000001.ldb"])
 
 
+class TrimCadenceTest(unittest.TestCase):
+    def test_fast_above_the_threshold_slow_below_and_off_by_default(self):
+        self.assertEqual(sh.trim_wait(900, 0.03, 800, 5, 30), 5)
+        self.assertEqual(sh.trim_wait(700, 0.03, 800, 5, 30), 30)
+        self.assertEqual(sh.trim_wait(900, 0.03, 0, 5, 30), 30)   # off
+        self.assertEqual(sh.trim_wait(None, 0.03, 800, 5, 30), 30)  # unreadable usage
+
+    def test_a_slow_pass_backs_off_ten_times_its_duration(self):
+        self.assertEqual(sh.trim_wait(900, 1.5, 800, 5, 30), 30)   # 10 x 1.5 = 15 < 30
+        self.assertEqual(sh.trim_wait(900, 4.0, 800, 5, 30), 40)
+        self.assertEqual(sh.trim_wait(900, 0.9, 800, 5, 30), 5)    # under 1 s: no back-off
+
+
 if __name__ == "__main__":
     unittest.main()

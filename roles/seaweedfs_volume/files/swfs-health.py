@@ -599,7 +599,18 @@ def _advise_dontneed(path):
         os.close(fd)
 
 
-def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0, ldb_dir=None):
+def trim_wait(usage_mib, wall_s, fast_above_mib, fast_s, slow_s):
+    """Seconds until the next governor sample: fast_s while charged usage is above fast_above_mib (0 = adaptive cadence off: always slow_s), slow_s below it.
+    A pass that took more than 1 s (a slow disk) makes the next one wait at least 10x its own duration, so the governor never becomes the load."""
+    wait = slow_s
+    if fast_above_mib > 0 and usage_mib is not None and usage_mib > fast_above_mib:
+        wait = fast_s
+    if wall_s > 1.0:
+        wait = max(wait, 10.0 * wall_s)
+    return wait
+
+
+def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0, ldb_dir=None, fast_above_mib=0, fast_s=5.0):
     trims = 0
     freed_total = 0.0
     wall_total = 0.0
@@ -611,8 +622,9 @@ def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0,
             freed_total += freed
             wall_total += wall
             cpu_total += cpu
-        state.set(cache_trims=trims, cache_trim_freed_mib=round(freed_total), cache_trim_seconds=round(wall_total, 3), cache_trim_cpu_seconds=round(cpu_total, 3), cache_trim_enabled=1)
-        time.sleep(interval)
+        wait = trim_wait(cgroup_usage_mib(uid), wall, fast_above_mib, fast_s, interval)
+        state.set(cache_trims=trims, cache_trim_freed_mib=round(freed_total), cache_trim_seconds=round(wall_total, 3), cache_trim_cpu_seconds=round(cpu_total, 3), cache_trim_enabled=1, cache_trim_wait_s=wait)
+        time.sleep(wait)
 
 
 def local_loop(state, uid, interval, budgets_path=None):
@@ -674,6 +686,8 @@ def main():
     p.add_argument("--trim-high", type=int, default=0, help="MiB of charged usage above which the cache governor trims (0 = off)")
     p.add_argument("--trim-low", type=int, default=0, help="MiB to trim down to")
     p.add_argument("--trim-ldb-dir", help="also drop the cache of the immutable .ldb tables of the filer's leveldb in this directory (after the volume files)")
+    p.add_argument("--trim-fast-above", type=int, default=0, help="MiB of charged usage above which the governor samples every --trim-fast-interval seconds instead of every 30 (0 = off)")
+    p.add_argument("--trim-fast-interval", type=float, default=5.0)
     p.add_argument("--trim-min-age", type=int, default=600, help="seconds a volume file must be unchanged before it is touched")
     p.add_argument("--budgets", help="JSON {unit: MiB}, the one declared RAM budget file; the units array reports each unit's RSS against it")
     p.add_argument("--cluster", action="store_true")
@@ -690,7 +704,7 @@ def main():
     a = p.parse_args()
     state = State()
     if a.trim_dir and a.trim_high > 0:
-        threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age, 30.0, a.trim_ldb_dir), daemon=True).start()
+        threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age, 30.0, a.trim_ldb_dir, a.trim_fast_above, a.trim_fast_interval), daemon=True).start()
     threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval, a.budgets), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()

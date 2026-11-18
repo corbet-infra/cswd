@@ -324,6 +324,22 @@
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
+- name: Retired files of ours removed (exact paths from seaweed_retired_files, each with its reason there)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ seaweed_retired_files }}"
+  loop_control:
+    label: "{{ item.path }}"
+- name: Their directories removed when empty (rmdir never removes a directory that still holds anything)
+  ansible.builtin.command: "rmdir {{ item }}"
+  args:
+    removes: "{{ item }}"
+  loop: "{{ seaweed_retired_files | selectattr('dir', 'defined') | map(attribute='dir') | unique | list }}"
+  register: seaweed_rmdir
+  failed_when: false
+  changed_when: seaweed_rmdir.rc | default(1) == 0
+
 - name: The account part (the provider's rootless Docker guard) is the pmd_account role
   ansible.builtin.include_role:
     name: corbet.cswd.pmd_account

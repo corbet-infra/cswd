@@ -172,3 +172,17 @@ seaweed_docker_neutralize_daemon_json: false
 # Measurement only: GODEBUG=gctrace=1 makes the filer log one line per garbage collection to its journal (with the GC's share of CPU), to see whether a low GOMEMLIMIT makes the GC run
 # nonstop. Off by default; remove after the canary.
 seaweed_filer_gctrace: false
+
+# Retired files of our own in {{ seaweed_bin_dir }}: exact paths only, no globs, no directory trees. Each is removed (state: absent) and its directory removed with rmdir (only if empty).
+# Kept on purpose: the previous weed version (weed-4.51-cw1) as the roll-back.
+seaweed_retired_files:
+  - path: "{{ seaweed_bin_dir }}/weed-4.51/weed"                         # the first weed install of 2026-10-26 (146 MB); superseded by 4.51-cw1/-cw2, its pages also sat in the page cache
+    dir: "{{ seaweed_bin_dir }}/weed-4.51"
+  - path: "{{ seaweed_bin_dir }}/rustfs-1.0.3/rustfs"                    # RustFS binary of the retired object store (the cluster runs SeaweedFS since 2026-10-27)
+    dir: "{{ seaweed_bin_dir }}/rustfs-1.0.3"
+  - path: "{{ seaweed_bin_dir }}/rustfs"                                 # symlink to rustfs-1.0.3
+  - path: "{{ seaweed_bin_dir }}/crfs-agent"                             # RustFS-era quota/hostwatch agent; its timer and units are gone (seed 2026-11-18, cld boxes never ran them)
+  - path: "{{ seaweed_bin_dir }}/__pycache__/swfs-master-guard.cpython-311.pyc"   # byte-code left by an import of the script; nothing imports it
+    dir: "{{ seaweed_bin_dir }}/__pycache__"
+  - path: "{{ seaweed_bin_dir }}/__pycache__/swfs-health.cpython-311.pyc"          # same
+    dir: "{{ seaweed_bin_dir }}/__pycache__"

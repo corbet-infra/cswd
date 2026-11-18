@@ -53,11 +53,11 @@ seaweed_default_replication: "010"  # two copies on different racks
 
 # Master maintenance script and cadence (default: no EC). An erasure coding setup overrides seaweed_master_scripts.
 seaweed_master_sleep_minutes: 17
+# ADD-ONLY by default (2026-11-18, owner: deletions are human-gated): volume.balance (copy then delete the source) and volume.deleteEmpty are not run, and volume.fix.replication
+# runs with -doDelete=false (it adds missing replicas, it never purges the "oldest" copy of an over-replicated volume: on 2026-11-13 06:41 that rule deleted the longer copy of volume 546).
 seaweed_master_scripts: |
   lock
-  volume.deleteEmpty -quietFor=24h -apply
-  volume.balance -apply
-  volume.fix.replication -apply
+  volume.fix.replication -apply -doDelete=false
   s3.clean.uploads -timeAgo=24h
   unlock
 

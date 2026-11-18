@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# The account part shared by every Pulsed Media account of ours (cld and vcld): keep the provider's rootless Docker from running.
+- name: bin and log directories of the account part
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ pmd_bin_dir }}"
+    - "{{ pmd_log_dir }}"
+
+- name: the provider's daemon.json kept as daemon.json.provider (once), then replaced by a line that makes dockerd refuse to start
+  when: pmd_docker_neutralize_daemon_json | bool
+  block:
+    - name: look at the current daemon.json
+      ansible.builtin.slurp:
+        src: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+      register: pmd_dj_current
+      failed_when: false
+    - name: keep the provider's original (only if it is not already the notice)
+      ansible.builtin.copy:
+        src: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+        dest: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json.provider"
+        remote_src: true
+        mode: "0600"
+        force: false
+      when: pmd_dj_current.content is defined and not ((pmd_dj_current.content | b64decode).startswith('# disabled by the account holder'))
+    - name: daemon.json says why Docker does not start (invalid JSON on purpose)
+      ansible.builtin.copy:
+        content: "# disabled by the account holder: Docker is not used in this account (support ticket #013678). The provider's original is daemon.json.provider.\n"
+        dest: "{{ ansible_facts['user_dir'] }}/.config/docker/daemon.json"
+        mode: "0600"
+      when: pmd_dj_current.content is defined
+- name: swfs-docker-guard script
+  ansible.builtin.copy:
+    src: swfs-docker-guard.py
+    dest: "{{ pmd_bin_dir }}/swfs-docker-guard.py"
+    mode: "0700"
+  register: pmd_dg_script
+- name: swfs-docker-guard service and path units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/{{ item }}"
+  loop:
+    - swfs-docker-guard.service
+    - swfs-docker-guard.path
+  register: pmd_dg_units
+- name: swfs-docker-guard.path enabled and watching (the service is only ever started by the path)
+  ansible.builtin.systemd_service:
+    name: swfs-docker-guard.path
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if (pmd_dg_script is changed or pmd_dg_units is changed) else 'started' }}"
+    scope: user
+  # in check mode the unit files of a first install do not exist yet
+  ignore_errors: "{{ ansible_check_mode }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+- name: swfs-docker-guard runs once now (a Docker that is already running creates no new files for the path unit to see)
+  ansible.builtin.systemd_service:
+    name: swfs-docker-guard.service
+    state: started
+    scope: user
+  ignore_errors: "{{ ansible_check_mode }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"

@@ -6,10 +6,10 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-docker-guard.py{% if not (seaweed_docker_guard_act | bool) %} --observe{% endif %}
+ExecStart=/usr/bin/python3 {{ pmd_bin_dir }}/swfs-docker-guard.py{% if not (pmd_docker_guard_act | bool) %} --observe{% endif %}
 
 UMask=0077
 Nice=10
 OOMScoreAdjust=950
-StandardOutput=append:{{ seaweed_log_dir }}/docker-guard.log
-StandardError=append:{{ seaweed_log_dir }}/docker-guard.log
+StandardOutput=append:{{ pmd_log_dir }}/docker-guard.log
+StandardError=append:{{ pmd_log_dir }}/docker-guard.log

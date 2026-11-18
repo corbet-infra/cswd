@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# Base directory of the account part (scripts, logs). cld boxes pass their ~/cold, other Pulsed accounts (vcld) use ~/pmd.
+pmd_base_dir: "{{ ansible_facts['user_dir'] }}/pmd"
+pmd_bin_dir: "{{ pmd_base_dir }}/bin"
+pmd_log_dir: "{{ pmd_base_dir }}/log"
+
+# swfs-docker-guard: the provider's root cron starts rootless Docker in the account (dockerEnabled=true, 27-189 MiB for the second it lives). A user path unit (inotify on the runtime
+# files, no polling) starts a one-shot that stops exactly that uid's Docker process tree. act=false only logs what it would stop (OBSERVE).
+pmd_docker_guard_enable: false
+pmd_docker_guard_act: false
+# Make dockerd refuse to start: a text line (invalid JSON) in the account's own ~/.config/docker/daemon.json; the provider's original is kept as daemon.json.provider.
+pmd_docker_neutralize_daemon_json: false

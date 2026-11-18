@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+# The account part on a Pulsed Media account that runs no SeaweedFS (group vcld, the seed box): keep the provider's rootless Docker from running.
+#   ansible-playbook corbet.cswd.pmd_account -e target=vcld [--check --diff]
+- name: pmd_account
+  hosts: "{{ target | default('vcld') }}"
+  gather_facts: true
+  roles:
+    - role: corbet.cswd.pmd_account
+      vars:
+        pmd_docker_guard_enable: true
+        pmd_docker_guard_act: true
+        pmd_docker_neutralize_daemon_json: true

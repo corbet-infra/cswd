@@ -5,7 +5,7 @@ import signal
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location("dg", os.path.join(os.path.dirname(__file__), "../../roles/seaweedfs_volume/files/swfs-docker-guard.py"))
+spec = importlib.util.spec_from_file_location("dg", os.path.join(os.path.dirname(__file__), "../../roles/pmd_account/files/swfs-docker-guard.py"))
 dg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dg)
 

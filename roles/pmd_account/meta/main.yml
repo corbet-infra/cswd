@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+---
+galaxy_info:
+  author: Julian Y. Richard Corbet
+  description: The account part shared by every Pulsed Media account of ours (the provider's rootless Docker kept from running)
+  license: LGPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+dependencies: []

@@ -389,6 +389,14 @@ def cgroup_memory_mib(uid, base=None):
     out["ram_limit_mib"] = mib(rd("limit_in_bytes"))
     out["ram_soft_limit_mib"] = None if soft is None else (-1 if soft >= 1 << 60 else mib(soft))
     out["ram_kmem_mib"] = mib(rd("kmem.usage_in_bytes"))
+    try:
+        for line in open(base + "/memory.oom_control"):
+            if line.startswith("oom_kill "):
+                out["ram_oom_kill"] = int(line.split()[1])
+            elif line.startswith("under_oom "):
+                out["ram_under_oom"] = int(line.split()[1])
+    except (OSError, ValueError):
+        pass
     names = {"total_rss": "ram_anon_mib", "total_cache": "ram_cache_mib", "total_shmem": "ram_shmem_mib", "total_mapped_file": "ram_mapped_file_mib",
              "total_active_file": "ram_active_file_mib", "total_inactive_file": "ram_inactive_file_mib", "total_rss_huge": "ram_rss_huge_mib", "total_swap": "ram_swap_mib"}
     try:
@@ -428,7 +436,29 @@ def classify_process(comm, cmdline):
     return None
 
 
-def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None):
+UNIT_SERVICES = {"weed-master": "seaweed-master.service", "weed-volume": "seaweed-volume.service", "weed-filer": "seaweed-filer.service", "weed-s3": "seaweed-s3.service",
+                 "otelcol": "o11y-otelcol.service", "node_exporter": "o11y-node-exporter.service", "swfs-health": "swfs-health.service"}
+
+
+def unit_states(run=None):
+    """{unit name: (active 1/0, NRestarts, failed 1/0)} for the user services above, from one `systemctl --user show` call: the failure signals a restart loop or a unit that is down
+    (a unit killed by the kernel or by systemd shows up as NRestarts growing or ActiveState failed). {} when systemctl cannot be asked."""
+    cmd = ["systemctl", "--user", "show", "-p", "Id", "-p", "ActiveState", "-p", "NRestarts", "-p", "Result"] + list(UNIT_SERVICES.values())
+    try:
+        if run is None:
+            run = lambda c: subprocess.run(c, capture_output=True, text=True, timeout=8).stdout
+        text = run(cmd)
+    except Exception:
+        return {}
+    by_service = {}
+    for block in text.split("\n\n"):
+        kv = dict(l.split("=", 1) for l in block.splitlines() if "=" in l)
+        if "Id" in kv:
+            by_service[kv["Id"]] = (1 if kv.get("ActiveState") == "active" else 0, int(kv.get("NRestarts", "0") or 0), 1 if kv.get("ActiveState") == "failed" or kv.get("Result", "success") not in ("success", "") else 0)
+    return {u: by_service[svc] for u, svc in UNIT_SERVICES.items() if svc in by_service}
+
+
+def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None, states=None):
     """[{unit, rss_mib, budget_mib}] for every name in UNIT_NAMES (0 when it does not run). The radar unit adds the children of its collector
     (a curl per fetch) and the size of its tmpfs spool; docker counts the whole rootless tree."""
     uid = os.getuid() if uid is None else uid
@@ -501,7 +531,10 @@ def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None):
                         mib += os.path.getsize(path) / 1048576.0
                 except OSError:
                     pass
-        out.append({"unit": n, "rss_mib": round(mib, 1), "budget_mib": budgets.get(n, 0)})
+        row = {"unit": n, "rss_mib": round(mib, 1), "budget_mib": budgets.get(n, 0)}
+        if states and n in states:
+            row["active"], row["restarts"], row["failed"] = states[n]
+        out.append(row)
     return out
 
 
@@ -701,7 +734,7 @@ def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
         mem = cgroup_memory_mib(uid)
-        units = unit_rows(uid=uid, budgets=load_budgets(budgets_path), spool_glob="/run/user/%d/radar-collector*" % uid)
+        units = unit_rows(uid=uid, budgets=load_budgets(budgets_path), spool_glob="/run/user/%d/radar-collector*" % uid, states=unit_states())
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()

@@ -450,5 +450,31 @@ class ClusterSeriesTest(unittest.TestCase):
             srv.shutdown()
 
 
+class FailureSignalsTest(unittest.TestCase):
+    def test_unit_states_parse_active_restarts_and_failed(self):
+        out = ("Id=seaweed-master.service\nActiveState=active\nResult=success\nNRestarts=0\n\n"
+               "Id=seaweed-volume.service\nActiveState=activating\nResult=exit-code\nNRestarts=3\n\n"
+               "Id=seaweed-filer.service\nActiveState=failed\nResult=signal\nNRestarts=1\n")
+        st = sh.unit_states(run=lambda c: out)
+        self.assertEqual(st["weed-master"], (1, 0, 0))
+        self.assertEqual(st["weed-volume"], (0, 3, 1))
+        self.assertEqual(st["weed-filer"], (0, 1, 1))
+        self.assertNotIn("weed-s3", st)
+        self.assertEqual(sh.unit_states(run=lambda c: (_ for _ in ()).throw(OSError("no systemctl"))), {})
+
+    def test_rows_carry_the_states_and_oom_kill_is_read(self):
+        import os, tempfile
+        rows = {r["unit"]: r for r in sh.unit_rows(tempfile.mkdtemp(), os.getuid(), {}, None, {"weed-s3": (1, 2, 0)})}
+        self.assertEqual((rows["weed-s3"]["active"], rows["weed-s3"]["restarts"], rows["weed-s3"]["failed"]), (1, 2, 0))
+        self.assertNotIn("restarts", rows["panel"])
+        d = tempfile.mkdtemp()
+        for n in ("usage_in_bytes", "max_usage_in_bytes", "limit_in_bytes", "soft_limit_in_bytes", "kmem.usage_in_bytes"):
+            open(os.path.join(d, "memory." + n), "w").write("1048576")
+        open(os.path.join(d, "memory.oom_control"), "w").write("oom_kill_disable 0\nunder_oom 0\noom_kill 4\n")
+        open(os.path.join(d, "memory.stat"), "w").write("total_rss 1048576\n")
+        m = sh.cgroup_memory_mib(1, base=d)
+        self.assertEqual((m["ram_oom_kill"], m["ram_under_oom"]), (4, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

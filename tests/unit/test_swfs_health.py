@@ -388,5 +388,67 @@ class TrimCadenceTest(unittest.TestCase):
         self.assertEqual(sh.trim_wait(900, 0.9, 800, 5, 30), 5)    # under 1 s: no back-off
 
 
+class ClusterSeriesTest(unittest.TestCase):
+    VL = (
+        "Topology volumeSizeLimit:8192 MB hdd(volume:1012/1050)\n"
+        "          volume Id:485, Size:9650176, ReplicaPlacement:010, Collection:, Version:3, Ttl:, FileCount:504, DeleteCount:0, DeletedByteCount:0, ReadOnly:true, ModifiedAtSecond:1\n"
+        "          volume Id:595, Size:675049472, ReplicaPlacement:010, Collection:cold-jfs-c, Version:3, Ttl:, FileCount:4114, DeleteCount:21, DeletedByteCount:15, ReadOnly:true, ModifiedAtSecond:1\n"
+        "          volume Id:600, Size:6000000000, ReplicaPlacement:010, Collection:cold-jfs-a, Version:3, Ttl:, FileCount:9, DeleteCount:0, DeletedByteCount:0, ReadOnly:true, ModifiedAtSecond:1\n"
+        "          volume Id:600, Size:6000000000, ReplicaPlacement:010, Collection:cold-jfs-a, Version:3, Ttl:, FileCount:9, DeleteCount:0, DeletedByteCount:0, ReadOnly:true, ModifiedAtSecond:1\n"
+        "          volume Id:601, Size:100, ReplicaPlacement:010, Collection:x, Version:3, Ttl:, FileCount:1, DeleteCount:0, DeletedByteCount:0, ReadOnly:false, ModifiedAtSecond:1\n"
+    )
+
+    def test_readonly_volumes_full_ones_are_normal_small_ones_abnormal(self):
+        limit = sh.parse_volume_size_limit_mb(self.VL)
+        self.assertEqual(limit, 8192)
+        self.assertEqual(sh.parse_readonly_volumes(self.VL, limit), (3, 2, ["485", "595"]))  # 600 is over half of 8 GB: waiting for ec.encode
+        self.assertEqual(sh.parse_readonly_volumes(self.VL, None)[1], 3)  # no limit known: all abnormal
+
+    def test_raft_peers(self):
+        self.assertEqual(sh.parse_raft_peers("the raft cluster has 7 servers\n  * a (Leader)\n"), 7)
+        self.assertIsNone(sh.parse_raft_peers("nothing"))
+
+    def test_s3_counters_parse_and_unreachable_endpoint(self):
+        import http.server, threading
+        body = (b'# HELP x\nSeaweedFS_s3_request_total{bucket="a",code="200",type="GET"} 10\nSeaweedFS_s3_request_total{bucket="a",code="503",type="PUT"} 3\n'
+                b'SeaweedFS_s3_request_total{bucket="b",code="500",type="GET"} 2\nSeaweedFS_s3_request_total{bucket="b",code="404",type="GET"} 5\n')
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            self.assertEqual(sh.s3_request_counters(srv.server_address[1]), (20, 5))
+        finally:
+            srv.shutdown()
+        self.assertEqual(sh.s3_request_counters(1), (None, None))
+
+    def test_leader_lookup(self):
+        import http.server, threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"IsLeader":true,"Leader":"x"}')
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            masters = "9.9.9.9:1.2,10.0.0.5:%d.77,8.8.8.8:3.4" % srv.server_address[1]
+            self.assertTrue(sh.own_master_is_leader(masters, "10.0.0.5"))
+            self.assertIsNone(sh.own_master_is_leader(masters, "10.0.0.6"))  # not in the list: cannot tell
+        finally:
+            srv.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()

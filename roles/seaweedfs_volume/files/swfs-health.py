@@ -211,6 +211,75 @@ def parse_cluster_status(text):
     return (int(nodes.group(1)) if nodes else None, int(writable.group(1).replace(",", "")) if writable else None)
 
 
+def parse_raft_peers(cluster_raft_ps_text):
+    """The number of raft servers the leader lists ('the raft cluster has 7 servers'); None when absent."""
+    m = re.search(r"raft cluster has (\d+)", cluster_raft_ps_text)
+    return int(m.group(1)) if m else None
+
+
+def parse_volume_size_limit_mb(text):
+    """The master's volumeSizeLimit from the topology line of volume.list / cluster.status ('volumeSizeLimit:8192 MB'); None when absent."""
+    m = re.search(r"volumeSizeLimit:(\d+) MB", text)
+    return int(m.group(1)) if m else None
+
+
+def parse_readonly_volumes(volume_list_text, limit_mb):
+    """(read-only volumes, of which abnormal): distinct volume ids marked ReadOnly:true in volume.list. A read-only volume that is at least half of the size limit is the normal kind
+    (full, waiting for ec.encode); a smaller one was made read-only for another reason (an interrupted ec.encode, a write error) and is abnormal. Without a limit every one counts as abnormal."""
+    ro = {}
+    for line in volume_list_text.splitlines():
+        m = re.search(r"volume Id:(\d+), Size:(\d+),.*ReadOnly:true", line)
+        if m:
+            ro[m.group(1)] = int(m.group(2))
+    half = (limit_mb or 0) * 1048576 / 2.0
+    abnormal = [v for v, size in ro.items() if not limit_mb or size < half]
+    return len(ro), len(abnormal), sorted(abnormal, key=int)
+
+
+def own_master_is_leader(masters, own_host, timeout=3):
+    """True/False from this box's own master (GET http://127.0.0.1:<port>/cluster/status, field IsLeader); None when it cannot be asked. `masters` is the --masters list
+    ('ip:httpPort.grpcPort,...'); our entry is the one with our own IP."""
+    import urllib.request
+    port = None
+    for item in (masters or "").split(","):
+        host, _, rest = item.partition(":")
+        if host == own_host:
+            port = rest.split(".")[0]
+            break
+    if not port:
+        return None
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%s/cluster/status" % port, timeout=timeout) as r:
+            return bool(json.load(r).get("IsLeader"))
+    except Exception:
+        return None
+
+
+def s3_request_counters(port, timeout=3):
+    """(all requests, 5xx answers) of this box's S3 gateway since it started, from its loopback Prometheus endpoint (SeaweedFS_s3_request_total{type,code,bucket});
+    (None, None) when the endpoint is not up."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/metrics" % port, timeout=timeout) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None, None
+    total = errors = 0
+    seen = False
+    for line in text.splitlines():
+        if not line.startswith("SeaweedFS_s3_request_total{"):
+            continue
+        m = re.search(r'code="(\d+)"[^}]*\}\s+([0-9.eE+]+)', line)
+        if not m:
+            continue
+        seen = True
+        n = int(float(m.group(2)))
+        total += n
+        if m.group(1).startswith("5"):
+            errors += n
+    return (total, errors) if seen else (0, 0)
+
+
 def write_path_problems(nodes, writable, expected_nodes):
     """What the leader's view says is wrong with the write path (empty list = fine)."""
     problems = []
@@ -332,6 +401,7 @@ def cgroup_memory_mib(uid, base=None):
     return out
 
 
+S3_METRICS_PORT = 19327  # the S3 gateway's Prometheus endpoint on the loopback (-metricsPort/-metricsIp in its unit)
 UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "weed-binary", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
 DOCKER_COMMS = ("dockerd", "containerd", "rootlesskit", "slirp4netns")
 
@@ -636,7 +706,8 @@ def local_loop(state, uid, interval, budgets_path=None):
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
         state.set(**provider_quota(), **provider_fs())
-        state.set(**mem, ram_ws_mib=ws, units=units, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
+        s3_total, s3_5xx = s3_request_counters(S3_METRICS_PORT)
+        state.set(**mem, s3_requests_total=s3_total, s3_5xx_total=s3_5xx, ram_ws_mib=ws, units=units, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
                   s3_fds=s3_fds, s3_rss_mib=s3_rss_mib, s3_swap_mib=s3_swap_mib)
@@ -644,26 +715,38 @@ def local_loop(state, uid, interval, budgets_path=None):
 
 
 def cluster_check(state, a, access, secret, own, peers):
-    """One round of the cluster-wide checks. Any failure of the round itself is a failed check, not a reason to keep the previous result."""
+    """One round of the checks. Every box runs the same code. The PER-BOX part (the marker write through this box's own gateway and its visibility on the peers: filer lag, own_gateway_busy,
+    write_probe_s) runs everywhere. The CLUSTER part (volume.list, cluster.ps, cluster.status, cluster.raft.ps: EC shorts, filers in the ring, data nodes, writable and read-only volumes, raft peers)
+    runs only on the box whose master is the raft leader right now, so one box asks the masters, not seven; elsewhere those fields are null. When the box cannot tell whether it leads, it
+    runs them (a failing check must be loud). Any failure of the round itself is a failed check, not a reason to keep the previous result."""
+    own_host = re.sub(r"^https?://", "", own).split(":")[0] if own else ""
+    leader = own_master_is_leader(a.masters, own_host)
+    cluster_fields = dict(ec_volumes=None, ec_volumes_short=None, ec_short_ids=None, filers_in_ring=None, topology_nodes=None, writable_volumes=None, raft_peers=None,
+                          volumes_readonly=None, volumes_readonly_abnormal=None, volume_size_limit_mb=None)
     try:
-        vl = weed_shell(a.weed, a.masters, ["volume.list"])
-        n_short, ids, n_ec = parse_ec_short(vl)
-        filers = None
-        for _ in range(4):  # the shell can list the filers a moment after it starts
-            filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
-            if filers:
-                break
-            time.sleep(3)
-        nodes, writable = parse_cluster_status(weed_shell(a.weed, a.masters, ["cluster.status"]))
         lag, missing, busy, put_s = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
-        missing = missing + write_path_problems(nodes, writable, a.expected_nodes or len(peers) + 1)
-        state.set(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, filer_lag_max_s=lag,
-                  topology_nodes=nodes, writable_volumes=writable,
+        if leader is not False:
+            vl = weed_shell(a.weed, a.masters, ["volume.list"])
+            n_short, ids, n_ec = parse_ec_short(vl)
+            limit_mb = parse_volume_size_limit_mb(vl)
+            n_ro, n_ro_bad, _ro_ids = parse_readonly_volumes(vl, limit_mb)
+            filers = None
+            for _ in range(4):  # the shell can list the filers a moment after it starts
+                filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
+                if filers:
+                    break
+                time.sleep(3)
+            raft = parse_raft_peers(weed_shell(a.weed, a.masters, ["cluster.raft.ps"]))
+            nodes, writable = parse_cluster_status(weed_shell(a.weed, a.masters, ["cluster.status"]))
+            missing = missing + write_path_problems(nodes, writable, a.expected_nodes or len(peers) + 1)
+            cluster_fields = dict(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, topology_nodes=nodes, writable_volumes=writable, raft_peers=raft,
+                                  volumes_readonly=n_ro, volumes_readonly_abnormal=n_ro_bad, volume_size_limit_mb=limit_mb)
+        state.set(filer_lag_max_s=lag, cluster_leader=(None if leader is None else (1 if leader else 0)), **cluster_fields,
                   filer_peers_not_answering=len(missing), filer_peers_missing=missing, own_gateway_busy=1 if busy else 0, write_probe_s=put_s, own_gateway_busy_reason=busy, cluster_error=None,
                   cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     except Exception as e:  # a check that cannot run counts as failed (a hung master makes the shell time out: exactly when the answer matters)
         why = "cluster check failed: " + repr(e)[:160]
-        state.set(cluster_error=repr(e)[:200], filer_lag_max_s=None, topology_nodes=None, writable_volumes=None,
+        state.set(cluster_error=repr(e)[:200], filer_lag_max_s=None, topology_nodes=None, writable_volumes=None, raft_peers=None, volumes_readonly=None, volumes_readonly_abnormal=None,
                   filer_peers_not_answering=max(1, len(peers)), filer_peers_missing=[why])
 
 

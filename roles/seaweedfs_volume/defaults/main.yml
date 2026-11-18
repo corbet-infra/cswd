@@ -229,3 +229,7 @@ seaweed_cache_trim_ldb: false
 seaweed_cache_trim_fast_above_mib: 0
 seaweed_cache_trim_fast_interval_s: 5
 
+# The S3 gateway's Prometheus endpoint, on the loopback only (swfs-health reads SeaweedFS_s3_request_total from it: swfs_health_s3_requests_total / _s3_5xx_total). The same number on every box
+# (cattle): a loopback port needs no provider assignment. swfs-health.py has the same constant.
+seaweed_s3_metrics_port: 19327
+

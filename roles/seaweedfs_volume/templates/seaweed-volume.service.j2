@@ -6,7 +6,8 @@ Description=SeaweedFS volume server ({{ inventory_hostname }})
 Type=simple
 Environment=HOME={{ ansible_facts['user_dir'] }}
 Environment=GOMEMLIMIT={{ seaweed_gomemlimit_volume }}
-{% if seaweed_limitdata_volume | string | length > 0 %}LimitDATA={{ seaweed_limitdata_volume }}
+{%% if seaweed_disable_thp | bool %%}Environment=GODEBUG=disablethp=1
+{%% endif %%}{% if seaweed_limitdata_volume | string | length > 0 %}LimitDATA={{ seaweed_limitdata_volume }}
 {% endif %}ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr volume \
   -ip={{ seaweed_public_ip }} -ip.bind=0.0.0.0 -port={{ seaweed_http_port }} -port.grpc={{ seaweed_grpc_port }} \
   -mserver={{ seaweed_master }} -dir={{ seaweed_data_dir }} -max={{ seaweed_max_volumes }} -minFreeSpace={{ seaweed_min_free_space }} \

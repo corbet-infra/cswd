@@ -5,7 +5,8 @@ Description=SeaweedFS master ({{ inventory_hostname }})
 Type=simple
 Environment=HOME={{ ansible_facts['user_dir'] }}
 Environment=GOMEMLIMIT={{ seaweed_gomemlimit_master }}
-{% if seaweed_limitdata_master | string | length > 0 %}LimitDATA={{ seaweed_limitdata_master }}
+{%% if seaweed_disable_thp | bool %%}Environment=GODEBUG=disablethp=1
+{%% endif %%}{% if seaweed_limitdata_master | string | length > 0 %}LimitDATA={{ seaweed_limitdata_master }}
 {% endif %}# every goroutine in a crash dump: the guard's SIGQUIT of a hung master (swfs-master-guard) must leave the stacks that show where it hung (the Go default prints one goroutine)
 Environment=GOTRACEBACK=all
 ExecStart={{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed -logtostderr master -telemetry=false \

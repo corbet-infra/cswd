@@ -306,5 +306,43 @@ class CgroupMemoryTest(unittest.TestCase):
         self.assertEqual(m["ram_active_file_mib"] + m["ram_inactive_file_mib"], 649)
 
 
+class CacheGovernorTest(unittest.TestCase):
+    def _files(self, d, spec, now):
+        import os
+        for name, age in spec.items():
+            p = os.path.join(d, name)
+            open(p, "w").write("x")
+            os.utime(p, (now - age, now - age))
+
+    def test_candidates_are_old_clean_volume_files_coldest_first(self):
+        import tempfile
+        now = 1_000_000.0
+        d = tempfile.mkdtemp()
+        self._files(d, {"a_1.dat": 5000, "a_2.dat": 9000, "a_3.dat": 100, "a_2.idx": 8000, "a_4.ec03": 7000, "weed.log": 99999, "x.ldb": 99999, "a_5.vif": 99999}, now)
+        got = [__import__("os").path.basename(p) for p in sh.trim_candidates(d, now, 600)]
+        self.assertEqual(got, ["a_2.dat", "a_2.idx", "a_4.ec03", "a_1.dat"])  # a_3.dat is too fresh; log, leveldb and .vif are never touched
+
+    def test_trim_stops_below_low_and_does_nothing_below_high(self):
+        import tempfile
+        now = 1_000_000.0
+        d = tempfile.mkdtemp()
+        self._files(d, {"a_%d.dat" % i: 5000 + i for i in range(10)}, now)
+        level = {"u": 950.0}
+        advised = []
+
+        def usage(_uid):
+            return level["u"]
+
+        def advise(p):
+            advised.append(p)
+            level["u"] -= 30.0
+        lines = []
+        n, freed = sh.trim_once(d, 0, 900, 850, 600, now=now, usage=usage, advise=advise, log=lines.append)
+        self.assertEqual(n, 4)  # 950 -> 920 -> 890 -> 860 -> 830 (< 850) stops after the fourth
+        self.assertEqual(freed, 120.0)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(sh.trim_once(d, 0, 900, 850, 600, now=now, usage=lambda _u: 800.0, advise=advise, log=lines.append), (0, 0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

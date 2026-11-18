@@ -484,6 +484,87 @@ def provider_fs(path=None):
     return {"provider_fs_size_gib": round(size / 1073741824), "provider_fs_used_gib": round(used / 1073741824), "provider_fs_fraction": round(used / size, 4)}
 
 
+VOLUME_FILE_RE = re.compile(r"\.(dat|idx|ec\d\d|ecx|ecj)$")
+
+
+def cgroup_usage_mib(uid):
+    try:
+        return int(open("/sys/fs/cgroup/memory/user.slice/user-%d.slice/memory.usage_in_bytes" % uid).read()) / 1048576.0
+    except (OSError, ValueError):
+        return None
+
+
+def trim_candidates(data_dir, now, min_age_s):
+    """Clean volume files of the volume directory, coldest first (max of atime and mtime), none changed in the last min_age_s seconds.
+    Only the volume directory itself, only .dat/.idx/.ecNN/.ecx/.ecj: never binaries, leveldb or anything else."""
+    out = []
+    try:
+        names = os.listdir(data_dir)
+    except OSError:
+        return out
+    for name in names:
+        if not VOLUME_FILE_RE.search(name):
+            continue
+        path = os.path.join(data_dir, name)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if not stat_is_regular(st) or now - st.st_mtime < min_age_s:
+            continue
+        out.append((max(st.st_atime, st.st_mtime), path))
+    out.sort()
+    return [p for _t, p in out]
+
+
+def stat_is_regular(st):
+    import stat as _stat
+    return _stat.S_ISREG(st.st_mode)
+
+
+def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgroup_usage_mib, advise=None, log=print):
+    """When the account's charged usage is above high_mib, drop the clean page cache of volume files (posix_fadvise DONTNEED), coldest first, until usage
+    is below low_mib. Returns (files_advised, freed_mib) with freed measured as the usage drop. One log line per trim."""
+    u0 = usage(uid)
+    if u0 is None or u0 <= high_mib:
+        return 0, 0.0
+    advise = advise or (lambda path: _advise_dontneed(path))
+    n = 0
+    for path in trim_candidates(data_dir, time.time() if now is None else now, min_age_s):
+        advise(path)
+        n += 1
+        u = usage(uid)
+        if u is not None and u < low_mib:
+            break
+    u1 = usage(uid)
+    freed = max(0.0, u0 - (u1 if u1 is not None else u0))
+    log("swfs-health: cache trim: usage %.0f -> %.0f MiB (high %d, low %d), %d volume files advised, %.0f MiB freed" % (u0, u1 if u1 is not None else -1, high_mib, low_mib, n, freed))
+    return n, freed
+
+
+def _advise_dontneed(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOATIME", 0))
+    except OSError:
+        return
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
+
+
+def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0):
+    trims = 0
+    freed_total = 0.0
+    while True:
+        n, freed = trim_once(data_dir, uid, high_mib, low_mib, min_age_s)
+        if n:
+            trims += 1
+            freed_total += freed
+        state.set(cache_trims=trims, cache_trim_freed_mib=round(freed_total), cache_trim_enabled=1)
+        time.sleep(interval)
+
+
 def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
@@ -539,6 +620,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--interval", type=float, default=60)
+    p.add_argument("--trim-dir", help="the volume directory whose clean files may be dropped from the page cache when the account's charged usage is high")
+    p.add_argument("--trim-high", type=int, default=0, help="MiB of charged usage above which the cache governor trims (0 = off)")
+    p.add_argument("--trim-low", type=int, default=0, help="MiB to trim down to")
+    p.add_argument("--trim-min-age", type=int, default=600, help="seconds a volume file must be unchanged before it is touched")
     p.add_argument("--budgets", help="JSON {unit: MiB}, the one declared RAM budget file; the units array reports each unit's RSS against it")
     p.add_argument("--cluster", action="store_true")
     p.add_argument("--weed")
@@ -553,6 +638,8 @@ def main():
     p.add_argument("--tls-key")
     a = p.parse_args()
     state = State()
+    if a.trim_dir and a.trim_high > 0:
+        threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age), daemon=True).start()
     threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval, a.budgets), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()

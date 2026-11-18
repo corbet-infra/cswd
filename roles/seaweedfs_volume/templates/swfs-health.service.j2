@@ -3,7 +3,7 @@
 Description=swfs-health ({{ inventory_hostname }}): health JSON for gatus (RAM of the account, EC shards, filers in the ring, filer lag)
 
 [Service]
-ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-health.py --port {{ seaweed_health_port }} --budgets {{ seaweed_unit_budgets_file }} --weed {{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed --masters {{ seaweed_master }} --cacert {{ seaweed_tls_dir }}/ca.pem --tls-cert {{ seaweed_tls_dir }}/cert.pem --tls-key {{ seaweed_tls_dir }}/key.pem --own-s3 https://{{ seaweed_public_ip }}:{{ seaweed_s3_https_port }} --peer-s3 {{ seaweed_health_peer_s3 }}{% if seaweed_health_cluster | bool %} --cluster{% endif %}
+ExecStart=/usr/bin/python3 {{ seaweed_base_dir }}/bin/swfs-health.py --port {{ seaweed_health_port }} --budgets {{ seaweed_unit_budgets_file }}{% if seaweed_cache_trim_high_mib | int > 0 %} --trim-dir {{ seaweed_data_dir }} --trim-high {{ seaweed_cache_trim_high_mib }} --trim-low {{ seaweed_cache_trim_low_mib }} --trim-min-age {{ seaweed_cache_trim_min_age_s }}{% endif %} --weed {{ seaweed_bin_dir }}/weed-{{ seaweed_version }}/weed --masters {{ seaweed_master }} --cacert {{ seaweed_tls_dir }}/ca.pem --tls-cert {{ seaweed_tls_dir }}/cert.pem --tls-key {{ seaweed_tls_dir }}/key.pem --own-s3 https://{{ seaweed_public_ip }}:{{ seaweed_s3_https_port }} --peer-s3 {{ seaweed_health_peer_s3 }}{% if seaweed_health_cluster | bool %} --cluster{% endif %}
 
 Restart=always
 RestartSec=5

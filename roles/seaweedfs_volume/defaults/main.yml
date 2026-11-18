@@ -186,3 +186,14 @@ seaweed_retired_files:
     dir: "{{ seaweed_bin_dir }}/__pycache__"
   - path: "{{ seaweed_bin_dir }}/__pycache__/swfs-health.cpython-311.pyc"          # same
     dir: "{{ seaweed_bin_dir }}/__pycache__"
+
+# Transparent hugepages: the host runs THP enabled=always and the Go heaps of the weed units sit in hugepages (rss_huge 188-428 MiB of 415-545 MiB rss on cld-0/1/5, 2026-11-18).
+# GODEBUG=disablethp=1 (Go 1.26.8 in weed 4.51) keeps the heap out of them. Off by default; a canary on cld-6 first.
+seaweed_disable_thp: false
+
+# Cache governor inside swfs-health (no daemon of its own): while the account's charged usage (memory.usage_in_bytes, page cache included) is above HIGH MiB, drop the clean page cache of
+# volume files (.dat/.idx/.ecNN/.ecx/.ecj in seaweed_data_dir only; posix_fadvise DONTNEED, coldest first, never a file changed in the last min_age seconds) until usage is below LOW.
+# Owner's line: 999 MiB charged, aim 900. 0 = off. Exported: swfs_health_cache_trims / _cache_trim_freed_mib.
+seaweed_cache_trim_high_mib: 0
+seaweed_cache_trim_low_mib: 850
+seaweed_cache_trim_min_age_s: 600

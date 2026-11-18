@@ -324,6 +324,18 @@
       environment:
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
+- name: Retired units stopped and disabled before their files go (absent on every box but cld-2: tolerated)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    scope: user
+  loop: "{{ seaweed_retired_units }}"
+  register: seaweed_retired_units_result
+  failed_when: seaweed_retired_units_result.failed | default(false) and ('Could not find' not in (seaweed_retired_units_result.msg | default('')))
+  ignore_errors: "{{ ansible_check_mode }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 - name: Retired files of ours removed (exact paths from seaweed_retired_files, each with its reason there)
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -339,6 +351,13 @@
   register: seaweed_rmdir
   failed_when: false
   changed_when: seaweed_rmdir.rc | default(1) == 0
+- name: User daemon reload after the retired units' files are gone
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    scope: user
+  ignore_errors: "{{ ansible_check_mode }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
 
 - name: The account part (the provider's rootless Docker guard) is the pmd_account role
   ansible.builtin.include_role:

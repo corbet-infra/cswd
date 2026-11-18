@@ -186,6 +186,10 @@ seaweed_retired_files:
     dir: "{{ seaweed_bin_dir }}/__pycache__"
   - path: "{{ seaweed_bin_dir }}/__pycache__/swfs-health.cpython-311.pyc"          # same
     dir: "{{ seaweed_bin_dir }}/__pycache__"
+  - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-ec-maint.timer"     # old EC maintenance timer (Thu 02:00 Berlin, dry run, never ran); 491c15d1 moved the work to swfs-maint
+  - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-ec-maint.service"   # its service (scrub + cleanup --threshold 0.3 without --apply)
+  - path: "{{ seaweed_bin_dir }}/swfs-ec-maintain.sh"                                    # its script (7,761 bytes, 2026-11-04); the role no longer ships it
+  - path: "{{ ansible_facts['user_dir'] }}/.seaweedfs/ec-maint.env"                      # its configuration (written with the script, no secret)
 
 # Transparent hugepages: the host runs THP enabled=always and the Go heaps of the weed units sit in hugepages (rss_huge 188-428 MiB of 415-545 MiB rss on cld-0/1/5, 2026-11-18).
 # GODEBUG=disablethp=1 (Go 1.26.8 in weed 4.51) keeps the heap out of them. Off by default; a canary on cld-6 first.
@@ -197,3 +201,9 @@ seaweed_disable_thp: false
 seaweed_cache_trim_high_mib: 0
 seaweed_cache_trim_low_mib: 850
 seaweed_cache_trim_min_age_s: 600
+
+# The pre-2026-11-04 EC maintenance units (only cld-2 still carries them): 491c15d1 (infra) moved the work to swfs-maint.sh / swfs-maint.timer on every box. They are stopped and disabled
+# first (tasks), then these exact files are removed.
+seaweed_retired_units:
+  - swfs-ec-maint.timer
+  - swfs-ec-maint.service

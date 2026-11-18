@@ -228,7 +228,7 @@ class UnitRowsTest(unittest.TestCase):
         os.makedirs(d)
         open(os.path.join(d, "stat"), "w").write("%d (%s) S %d 0 0 0\n" % (pid, comm, ppid))
         open(os.path.join(d, "cmdline"), "wb").write(cmd.replace(" ", "\0").encode())
-        open(os.path.join(d, "status"), "w").write("VmRSS:\t%d kB\n" % kib)
+        open(os.path.join(d, "status"), "w").write("VmRSS:\t%d kB\nRssAnon:\t%d kB\nRssFile:\t%d kB\n" % (kib, kib - 4096 if comm == "weed" else kib, 4096 if comm == "weed" else 0))
 
     def test_classify(self):
         c = sh.classify_process
@@ -249,7 +249,8 @@ class UnitRowsTest(unittest.TestCase):
             self._proc(root, 21, 20, "curl", "curl https://x", 6 * 1024)
             self._proc(root, 30, 1, "bash", "bash", 3 * 1024)
             rows = {r["unit"]: r for r in sh.unit_rows(root, uid, {"weed-master": 80, "radar": 20})}
-        self.assertEqual(rows["weed-master"], {"unit": "weed-master", "rss_mib": 36.0, "budget_mib": 80})
+        self.assertEqual(rows["weed-master"], {"unit": "weed-master", "rss_mib": 32.0, "budget_mib": 80})  # anonymous part only: 36 MiB rss minus 4 MiB of shared binary
+        self.assertEqual(rows["weed-binary"]["rss_mib"], 4.0)
         self.assertEqual(rows["radar"]["rss_mib"], 14.0)
         self.assertEqual(rows["radar"]["budget_mib"], 20)
         self.assertEqual(rows["docker"]["rss_mib"], 0)

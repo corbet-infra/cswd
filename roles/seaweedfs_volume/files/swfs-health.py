@@ -332,7 +332,7 @@ def cgroup_memory_mib(uid, base=None):
     return out
 
 
-UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
+UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "weed-binary", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
 DOCKER_COMMS = ("dockerd", "containerd", "rootlesskit", "slirp4netns")
 
 
@@ -382,17 +382,23 @@ def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None):
             comm = st[st.index("(") + 1:st.rindex(")")]
             with open(os.path.join(p, "cmdline"), "rb") as f:
                 cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
-            kib = 0
+            kib = anon = filekib = 0
+            have_split = False
             with open(os.path.join(p, "status")) as f:
                 for line in f:
                     if line.startswith("VmRSS:"):
                         kib = int(line.split()[1])
-                        break
-            procs[int(name)] = (ppid, comm, cmd, kib)
+                    elif line.startswith("RssAnon:"):
+                        anon = int(line.split()[1])
+                        have_split = True
+                    elif line.startswith("RssFile:"):
+                        filekib = int(line.split()[1])
+            procs[int(name)] = (ppid, comm, cmd, kib, anon if have_split else kib, filekib)
         except (OSError, ValueError, IndexError):
             continue
-    unit_of = {pid: classify_process(c, m) for pid, (_pp, c, m, _k) in procs.items()}
-    for pid, (ppid, _c, _m, kib) in procs.items():
+    unit_of = {pid: classify_process(c, m) for pid, (_pp, c, m, _k, _a, _f) in procs.items()}
+    weed_text_kib = 0
+    for pid, (ppid, _c, _m, kib, anon, filekib) in procs.items():
         u = unit_of[pid]
         if u is None:  # a child of a radar collector (curl per fetch) counts for radar
             a = ppid
@@ -403,8 +409,14 @@ def unit_rows(proc_root="/proc", uid=None, budgets=None, spool_glob=None):
                     break
                 a = procs[a][0]
                 seen += 1
-        if u:
+        if u and u.startswith("weed-"):
+            # the four weed processes map ONE binary: their file pages are charged to the account once. Each weed unit reports its anonymous memory,
+            # the shared text is the unit "weed-binary" (the largest RssFile of the four), so the budgets add up.
+            rss[u] += anon
+            weed_text_kib = max(weed_text_kib, filekib)
+        elif u:
             rss[u] += kib
+    rss["weed-binary"] = weed_text_kib
     out = []
     for n in UNIT_NAMES:
         mib = rss[n] / 1024.0

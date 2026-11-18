@@ -153,16 +153,21 @@ seaweed_limitdata_s3: ""
 
 # The ONE declared RAM budget per unit (MiB), read by swfs-health (swfs_health_unit_rss_mib / _budget_mib) and nothing else decides it. Aim of the account: ram_ws never above 900 MiB.
 seaweed_unit_budgets_mib:
-  weed-master: 80
-  weed-volume: 200
-  weed-filer: 200
-  weed-s3: 140
-  otelcol: 30
-  node_exporter: 15
-  swfs-health: 30
-  radar: 20
-  panel: 0
-  docker: 0
+  # CHARGED terms (anon + file pages the account pays for, 2026-11-18, owner: charged usage incl. page cache never above 999, aim 900). The four weed processes share one binary, so their
+  # lines are anonymous memory only and the shared text is its own line (weed-binary): the budgets add up. Maxima seen over the seven boxes under the jfs-a drain, rounded up.
+  weed-master: 70        # anon 27-59
+  weed-volume: 90        # anon 35-65 (compaction/EC passes were seen at ~110)
+  weed-filer: 280        # anon 176-259; the filer's heap is ~220 MB live, GOMEMLIMIT 300MiB must stay above it
+  weed-s3: 100           # anon 42-91
+  weed-binary: 110       # resident text of the weed binary (one copy), 80-120
+  otelcol: 45            # anon 24-31 + file 8-16 (o11y may slim it)
+  node_exporter: 25      # anon 8-22 + file 3-7
+  swfs-health: 50        # the swfs-* python daemons together: anon 16-23 + file 18-24
+  radar: 20              # tree + spool, per jc-intake
+  panel: 90              # the provider's lighttpd + php-cgi: NOT ours, restarted every minute by the provider's root cron (checkLighttpdInstances.php); measured 8-82 MiB, listed so it is visible
+  docker: 0              # the provider's rootless Docker: stopped by swfs-docker-guard
+  # Sum of the lines = 880 (incl. the provider's panel). It is a ceiling, not a forecast: the medians add up to ~600; the owner's line is on charged usage, which also carries
+  # kernel memory (25-130) and the page-cache floor, see cold-tier-seaweedfs.md.
 seaweed_unit_budgets_file: "{{ seaweed_base_dir }}/etc/unit-budgets.json"
 
 # The provider's rootless Docker: besides stopping it (swfs-docker-guard), make dockerd refuse to start at all by putting a text line (invalid JSON) into the account's own

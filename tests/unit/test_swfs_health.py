@@ -361,6 +361,19 @@ class LdbGovernorTest(unittest.TestCase):
         got = [os.path.basename(p) for p in sh.ldb_candidates(d, now, 120)]
         self.assertEqual(got, ["001221.ldb"])
 
+    def test_only_old_log_files_are_candidates(self):
+        import os, tempfile
+        now = 1_000_000.0
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "sub"))
+        for name, age in {"master.log": 5000, "filer.log": 100, "notes.txt": 99999, "sub/x.log": 99999}.items():
+            p = os.path.join(d, name)
+            open(p, "w").write("x")
+            os.utime(p, (now - age, now - age))
+        got = [os.path.basename(p) for p in sh.log_candidates(d, now, 120)]
+        self.assertEqual(got, ["master.log"])
+        self.assertEqual(sh.log_candidates(os.path.join(d, "missing"), now, 120), [])
+
     def test_trim_once_tries_volume_files_then_ldb_tables(self):
         import os, tempfile
         now = 1_000_000.0

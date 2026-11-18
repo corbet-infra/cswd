@@ -224,6 +224,9 @@ seaweed_retired_units:
 # min age go to the disk. Off by default; a canary on cld-0 with S3 latency probes before and after.
 seaweed_cache_trim_ldb: false
 
+# The governor also drops the cache of the clean *.log files in ~/cold/log (same min age, same trigger). Identical on all seven boxes (owner: cattle).
+seaweed_cache_trim_logs: true
+
 # Adaptive cadence of the governor: while charged usage is above FAST_ABOVE MiB it samples every FAST_INTERVAL seconds instead of every 30 (bursts of 50-70 MiB between 30-s passes
 # reached 1077 and 1249 on cld-0 and cld-3). A pass longer than 1 s makes the next one wait 10x its duration. 0 = off.
 seaweed_cache_trim_fast_above_mib: 0

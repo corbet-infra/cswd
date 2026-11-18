@@ -416,6 +416,43 @@ def load_budgets(path):
         return {}
 
 
+def _quota_number(tok, files=False):
+    """'297G' -> GiB (disk) or '621k' -> 621000 (files). The shop's quota(1) prints disk in K/M/G/T (1024) and files with k (1000)."""
+    tok = tok.strip()
+    if not tok or tok == "-":
+        return None
+    mult = {"k": 1000, "K": 1000} if files else {"k": 1.0 / 1048576, "K": 1.0 / 1048576, "M": 1.0 / 1024, "G": 1.0, "T": 1024.0}
+    unit = tok[-1]
+    try:
+        if unit.isdigit():
+            return float(tok) if files else float(tok) / 1048576  # bare numbers: files as is, disk in KiB
+        return float(tok[:-1]) * mult[unit]
+    except (ValueError, KeyError):
+        return None
+
+
+def provider_quota(path=None):
+    """The account's disk and file quota from the text the provider keeps in ~/.quota (`quota -u`, refreshed by its root cron).
+    Returns {} when unreadable. disk in GiB, files as counts; fractions are used/quota."""
+    path = path or os.path.expanduser("~/.quota")
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        t = line.split()
+        if len(t) >= 7 and t[0].startswith("/"):
+            used, quota, limit = (_quota_number(x) for x in t[1:4])
+            fused, fquota, flimit = (_quota_number(x, True) for x in t[4:7])
+            out = {}
+            if used is not None and quota:
+                out.update(quota_disk_used_gib=round(used, 2), quota_disk_quota_gib=round(quota, 1), quota_disk_fraction=round(used / quota, 4))
+            if fused is not None and fquota:
+                out.update(quota_files_used=int(fused), quota_files_quota=int(fquota), quota_files_fraction=round(fused / fquota, 4))
+            return out
+    return {}
+
+
 def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
@@ -424,6 +461,7 @@ def local_loop(state, uid, interval, budgets_path=None):
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
+        state.set(**provider_quota())
         state.set(ram_ws_mib=ws, ram_anon_mib=anon, ram_cache_mib=cache, units=units, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),

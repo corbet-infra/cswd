@@ -265,5 +265,20 @@ class UnitRowsTest(unittest.TestCase):
         self.assertEqual(sh.load_budgets(os.path.join(d, "none")), {})
 
 
+class QuotaTest(unittest.TestCase):
+    def test_provider_quota_text(self):
+        import os, tempfile
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "q")
+        open(p, "w").write("Disk quotas for user richc (uid 1001):\n     Filesystem   space   quota   limit   grace   files   quota   limit   grace\n       /dev/vda    297G   1241G   1552G           66437    621k    776k\n")
+        q = sh.provider_quota(p)
+        self.assertEqual(q["quota_disk_used_gib"], 297.0)
+        self.assertEqual(q["quota_disk_quota_gib"], 1241.0)
+        self.assertEqual(q["quota_files_used"], 66437)
+        self.assertEqual(q["quota_files_quota"], 621000)
+        self.assertAlmostEqual(q["quota_disk_fraction"], 297 / 1241, places=4)
+        self.assertEqual(sh.provider_quota(os.path.join(d, "none")), {})
+
+
 if __name__ == "__main__":
     unittest.main()

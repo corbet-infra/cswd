@@ -161,7 +161,7 @@ seaweed_unit_budgets_mib:
   weed-s3: 100           # anon 42-91
   weed-binary: 110       # resident text of the weed binary (one copy), 80-120
   otelcol: 45            # anon 24-31 + file 8-16 (o11y may slim it)
-  node_exporter: 25      # anon 8-22 + file 3-7
+  node_exporter: 32      # anon 8-22 + file 3-7 charged: 12.6-24.7 MiB on the seven today, o11y saw 28.3 on cld-1; its own GOMEMLIMIT is 40MiB, the lines is ceiling of the measured maximum + ~10 %
   swfs-health: 50        # the swfs-* python daemons together: anon 16-23 + file 18-24
   radar: 20              # tree + spool, per jc-intake
   panel: 90              # the provider's lighttpd + php-cgi: NOT ours, restarted every minute by the provider's root cron (checkLighttpdInstances.php); measured 8-82 MiB, listed so it is visible

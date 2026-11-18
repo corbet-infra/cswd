@@ -280,5 +280,13 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(sh.provider_quota(os.path.join(d, "none")), {})
 
 
+class ProviderFsTest(unittest.TestCase):
+    def test_fraction_and_sizes(self):
+        import tempfile
+        r = sh.provider_fs(tempfile.gettempdir())
+        self.assertTrue(0 < r["provider_fs_fraction"] <= 1)
+        self.assertEqual(sh.provider_fs("/nonexistent/path/x"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

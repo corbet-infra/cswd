@@ -453,6 +453,19 @@ def provider_quota(path=None):
     return {}
 
 
+def provider_fs(path=None):
+    """Fill of the provider's shared filesystem under the account home (df -P ~): a full disk on the provider's side makes writes fail even below our quota."""
+    try:
+        st = os.statvfs(path or os.path.expanduser("~"))
+    except OSError:
+        return {}
+    size = st.f_blocks * st.f_frsize
+    used = (st.f_blocks - st.f_bfree) * st.f_frsize
+    if not size:
+        return {}
+    return {"provider_fs_size_gib": round(size / 1073741824), "provider_fs_used_gib": round(used / 1073741824), "provider_fs_fraction": round(used / size, 4)}
+
+
 def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
@@ -461,7 +474,7 @@ def local_loop(state, uid, interval, budgets_path=None):
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
-        state.set(**provider_quota())
+        state.set(**provider_quota(), **provider_fs())
         state.set(ram_ws_mib=ws, ram_anon_mib=anon, ram_cache_mib=cache, units=units, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),

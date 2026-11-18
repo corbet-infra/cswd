@@ -187,6 +187,9 @@ seaweed_retired_files:
   - path: "{{ seaweed_bin_dir }}/__pycache__/swfs-health.cpython-311.pyc"          # same
     dir: "{{ seaweed_bin_dir }}/__pycache__"
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-ec-maint.timer"     # old EC maintenance timer (Thu 02:00 Berlin, dry run, never ran); 491c15d1 moved the work to swfs-maint
+  - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/crfs-quota.timer"        # RustFS-era quota timer (every 5 min), its agent crfs-agent is gone; swfs-health reports the quota from ~/.quota now
+  - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/crfs-quota.service"      # its service
+  - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/rustfs.service"          # the RustFS unit (inactive, disabled everywhere)
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-ec-maint.service"   # its service (scrub + cleanup --threshold 0.3 without --apply)
   - path: "{{ seaweed_bin_dir }}/swfs-ec-maintain.sh"                                    # its script (7,761 bytes, 2026-11-04); the role no longer ships it
   - path: "{{ ansible_facts['user_dir'] }}/.seaweedfs/ec-maint.env"                      # its configuration (written with the script, no secret)
@@ -207,3 +210,6 @@ seaweed_cache_trim_min_age_s: 600
 seaweed_retired_units:
   - swfs-ec-maint.timer
   - swfs-ec-maint.service
+  - crfs-quota.timer       # RustFS-era quota agent (crfs-agent, removed with the retired files); enabled on cld-3, -5, -6 it fired a failing service every 5 min
+  - crfs-quota.service
+  - rustfs.service         # RustFS store, retired since the cluster runs SeaweedFS (2026-10-27)

@@ -288,5 +288,23 @@ class ProviderFsTest(unittest.TestCase):
         self.assertEqual(sh.provider_fs("/nonexistent/path/x"), {})
 
 
+class CgroupMemoryTest(unittest.TestCase):
+    def test_anon_is_total_rss_only_and_soft_limit_unlimited_is_minus_one(self):
+        import os, tempfile
+        d = tempfile.mkdtemp()
+        MiB = 1048576
+        for name, val in {"usage_in_bytes": 1301 * MiB, "max_usage_in_bytes": 1310 * MiB, "limit_in_bytes": 1250 * MiB, "soft_limit_in_bytes": 9223372036854771712, "kmem.usage_in_bytes": 69 * MiB}.items():
+            open(os.path.join(d, "memory." + name), "w").write(str(val))
+        open(os.path.join(d, "memory.stat"), "w").write("cache 0\ntotal_cache %d\ntotal_rss %d\ntotal_rss_huge %d\ntotal_shmem 0\ntotal_mapped_file %d\ntotal_active_file %d\ntotal_inactive_file %d\ntotal_swap %d\n" % (651 * MiB, 458 * MiB, 222 * MiB, 123 * MiB, 400 * MiB, 249 * MiB, 16 * MiB))
+        m = sh.cgroup_memory_mib(1000, base=d)
+        self.assertEqual(m["ram_anon_mib"], 458)  # not 458 + 222: rss already includes the transparent hugepages
+        self.assertEqual(m["ram_rss_huge_mib"], 222)
+        self.assertEqual(m["ram_cache_mib"], 651)
+        self.assertEqual(m["ram_usage_mib"], 1301)
+        self.assertEqual(m["ram_soft_limit_mib"], -1)
+        self.assertEqual(m["ram_kmem_mib"], 69)
+        self.assertEqual(m["ram_active_file_mib"] + m["ram_inactive_file_mib"], 649)
+
+
 if __name__ == "__main__":
     unittest.main()

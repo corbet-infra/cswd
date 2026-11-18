@@ -295,22 +295,40 @@ def make_handler(state):
     return H
 
 
-def cgroup_anon_cache_mib(uid):
-    """(anon, cache) MiB of the account from memory.stat: anon = total_rss + total_rss_huge (what cannot be reclaimed), cache = total_cache (reclaimable).
-    ram_ws_mib mixes the two; the 900 MiB line is about the anon part."""
+def cgroup_memory_mib(uid, base=None):
+    """The account's own memory-cgroup numbers (cgroup v1, readable without root), MiB: what the provider charges.
+    usage/max_usage/limit/soft_limit/kmem come from the memory.* files, the split from memory.stat (hierarchical total_*).
+    anon = total_rss ONLY: in cgroup v1 `rss` already includes the anonymous transparent hugepages that `rss_huge` counts again
+    (the first version added them and overstated anon by up to 220 MiB). cache = total_cache (includes mapped files and tmpfs).
+    soft_limit is -1 when unlimited (the kernel's 2^63 value)."""
+    base = base or "/sys/fs/cgroup/memory/user.slice/user-%d.slice" % uid
+
+    def rd(name):
+        try:
+            return int(open(base + "/memory." + name).read())
+        except (OSError, ValueError):
+            return None
+
+    def mib(v):
+        return None if v is None else round(v / 1048576)
+
+    out = {}
+    soft = rd("soft_limit_in_bytes")
+    out["ram_usage_mib"] = mib(rd("usage_in_bytes"))
+    out["ram_max_usage_mib"] = mib(rd("max_usage_in_bytes"))
+    out["ram_limit_mib"] = mib(rd("limit_in_bytes"))
+    out["ram_soft_limit_mib"] = None if soft is None else (-1 if soft >= 1 << 60 else mib(soft))
+    out["ram_kmem_mib"] = mib(rd("kmem.usage_in_bytes"))
+    names = {"total_rss": "ram_anon_mib", "total_cache": "ram_cache_mib", "total_shmem": "ram_shmem_mib", "total_mapped_file": "ram_mapped_file_mib",
+             "total_active_file": "ram_active_file_mib", "total_inactive_file": "ram_inactive_file_mib", "total_rss_huge": "ram_rss_huge_mib", "total_swap": "ram_swap_mib"}
     try:
-        rss = huge = cache = 0
-        for line in open("/sys/fs/cgroup/memory/user.slice/user-%d.slice/memory.stat" % uid):
+        for line in open(base + "/memory.stat"):
             k, _, v = line.partition(" ")
-            if k == "total_rss":
-                rss = int(v)
-            elif k == "total_rss_huge":
-                huge = int(v)
-            elif k == "total_cache":
-                cache = int(v)
-        return round((rss + huge) / 1048576), round(cache / 1048576)
+            if k in names:
+                out[names[k]] = mib(int(v))
     except (OSError, ValueError):
-        return None, None
+        pass
+    return out
 
 
 UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
@@ -469,13 +487,13 @@ def provider_fs(path=None):
 def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
-        anon, cache = cgroup_anon_cache_mib(uid)
+        mem = cgroup_memory_mib(uid)
         units = unit_rows(uid=uid, budgets=load_budgets(budgets_path), spool_glob="/run/user/%d/radar-collector*" % uid)
         docker_pids, docker_mib = provider_docker_processes()
         docker_policy = provider_docker_policy()
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
         state.set(**provider_quota(), **provider_fs())
-        state.set(ram_ws_mib=ws, ram_anon_mib=anon, ram_cache_mib=cache, units=units, ram_usage_mib=usage, ram_limit_mib=limit, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
+        state.set(**mem, ram_ws_mib=ws, units=units, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
                   s3_fds=s3_fds, s3_rss_mib=s3_rss_mib, s3_swap_mib=s3_swap_mib)

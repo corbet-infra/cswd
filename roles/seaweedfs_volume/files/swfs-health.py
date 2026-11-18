@@ -236,6 +236,42 @@ def parse_readonly_volumes(volume_list_text, limit_mb):
     return len(ro), len(abnormal), sorted(abnormal, key=int)
 
 
+def parse_replica_counts(volume_list_text):
+    """(under-replicated, over-replicated) distinct volumes of volume.list: the number of listed replicas of a volume against its ReplicaPlacement (digits summed + 1, '010' = 2).
+    EC volumes are not counted. A volume with fewer replicas listed than it wants is under-replicated; more is over-replicated (the master would purge the 'oldest' copy of those unless
+    the repair is add-only, see seaweed_master_scripts)."""
+    seen = {}
+    want = {}
+    for line in volume_list_text.splitlines():
+        m = re.search(r"volume Id:(\d+), .*ReplicaPlacement:(\d{3})", line)
+        if m:
+            seen[m.group(1)] = seen.get(m.group(1), 0) + 1
+            want[m.group(1)] = 1 + sum(int(c) for c in m.group(2))
+    under = sorted(v for v, n in seen.items() if n < want[v])
+    over = sorted(v for v, n in seen.items() if n > want[v])
+    return len(under), len(over), under, over
+
+
+def local_volume_readonly(status_url, cacert, cert, key, limit_mb, timeout=8):
+    """(read-only volumes, abnormal ones) of THIS box's volume server, from its own /status (mutual TLS with the box's certificate): abnormal = read-only and smaller than half of
+    the size limit (a full volume waiting for ec.encode is normal). (None, None) when the volume server cannot be asked."""
+    import urllib.request
+    try:
+        ctx = None
+        if status_url.startswith("https"):
+            ctx = ssl.create_default_context(cafile=cacert)
+            ctx.load_cert_chain(cert, key)
+            ctx.check_hostname = False
+        with urllib.request.urlopen(status_url, timeout=timeout, context=ctx) as r:
+            vols = json.load(r).get("Volumes") or []
+    except Exception:
+        return None, None
+    ro = [v for v in vols if v.get("ReadOnly")]
+    half = (limit_mb or 0) * 1048576 / 2.0
+    bad = [v for v in ro if not limit_mb or int(v.get("Size", 0)) < half]
+    return len(ro), len(bad)
+
+
 def own_master_is_leader(masters, own_host, timeout=3):
     """True/False from this box's own master (GET http://127.0.0.1:<port>/cluster/status, field IsLeader); None when it cannot be asked. `masters` is the --masters list
     ('ip:httpPort.grpcPort,...'); our entry is the one with our own IP."""
@@ -409,6 +445,7 @@ def cgroup_memory_mib(uid, base=None):
     return out
 
 
+VOLUME_STATUS = {"url": None, "ca": None, "cert": None, "key": None, "limit_mb": 0}  # filled from the command line: this box's own volume server
 S3_METRICS_PORT = 19327  # the S3 gateway's Prometheus endpoint on the loopback (-metricsPort/-metricsIp in its unit)
 UNIT_NAMES = ("weed-master", "weed-volume", "weed-filer", "weed-s3", "weed-binary", "otelcol", "node_exporter", "swfs-health", "radar", "panel", "docker")
 DOCKER_COMMS = ("dockerd", "containerd", "rootlesskit", "slirp4netns")
@@ -443,7 +480,7 @@ UNIT_SERVICES = {"weed-master": "seaweed-master.service", "weed-volume": "seawee
 def unit_states(run=None):
     """{unit name: (active 1/0, NRestarts, failed 1/0)} for the user services above, from one `systemctl --user show` call: the failure signals a restart loop or a unit that is down
     (a unit killed by the kernel or by systemd shows up as NRestarts growing or ActiveState failed). {} when systemctl cannot be asked."""
-    cmd = ["systemctl", "--user", "show", "-p", "Id", "-p", "ActiveState", "-p", "NRestarts", "-p", "Result"] + list(UNIT_SERVICES.values())
+    cmd = ["systemctl", "--user", "show", "-p", "Id", "-p", "LoadState", "-p", "ActiveState", "-p", "NRestarts", "-p", "Result"] + list(UNIT_SERVICES.values())
     try:
         if run is None:
             run = lambda c: subprocess.run(c, capture_output=True, text=True, timeout=8).stdout
@@ -453,7 +490,7 @@ def unit_states(run=None):
     by_service = {}
     for block in text.split("\n\n"):
         kv = dict(l.split("=", 1) for l in block.splitlines() if "=" in l)
-        if "Id" in kv:
+        if "Id" in kv and kv.get("LoadState", "loaded") == "loaded":  # a unit this box does not have by design is not reported (no active=0)
             by_service[kv["Id"]] = (1 if kv.get("ActiveState") == "active" else 0, int(kv.get("NRestarts", "0") or 0), 1 if kv.get("ActiveState") == "failed" or kv.get("Result", "success") not in ("success", "") else 0)
     return {u: by_service[svc] for u, svc in UNIT_SERVICES.items() if svc in by_service}
 
@@ -740,6 +777,9 @@ def local_loop(state, uid, interval, budgets_path=None):
         s3_fds, s3_rss_mib, s3_swap_mib = s3_gateway_process()
         state.set(**provider_quota(), **provider_fs())
         s3_total, s3_5xx = s3_request_counters(S3_METRICS_PORT)
+        if VOLUME_STATUS["url"]:
+            ro, ro_bad = local_volume_readonly(VOLUME_STATUS["url"], VOLUME_STATUS["ca"], VOLUME_STATUS["cert"], VOLUME_STATUS["key"], VOLUME_STATUS["limit_mb"])
+            state.set(volumes_readonly=ro, volumes_readonly_abnormal=ro_bad)
         state.set(**mem, s3_requests_total=s3_total, s3_5xx_total=s3_5xx, ram_ws_mib=ws, units=units, ram_failcnt=cgroup_failcnt(uid), host_mem_psi_some_avg60=host_psi("memory"), host_io_psi_some_avg60=host_psi("io"), load1=os.getloadavg()[0],
                   provider_docker=1 if docker_pids else 0, provider_docker_pids=docker_pids, provider_docker_mib=docker_mib,
                   provider_docker_enabled=-1 if docker_policy is None else (1 if docker_policy else 0),
@@ -755,7 +795,7 @@ def cluster_check(state, a, access, secret, own, peers):
     own_host = re.sub(r"^https?://", "", own).split(":")[0] if own else ""
     leader = own_master_is_leader(a.masters, own_host)
     cluster_fields = dict(ec_volumes=None, ec_volumes_short=None, ec_short_ids=None, filers_in_ring=None, topology_nodes=None, writable_volumes=None, raft_peers=None,
-                          volumes_readonly=None, volumes_readonly_abnormal=None, volume_size_limit_mb=None)
+                          cluster_volumes_readonly=None, cluster_volumes_readonly_abnormal=None, volume_size_limit_mb=None, volumes_under_replicated=None, volumes_over_replicated=None)
     try:
         lag, missing, busy, put_s = lag_probe(own, peers, a.bucket, access, secret, a.cacert)
         if leader is not False:
@@ -763,6 +803,7 @@ def cluster_check(state, a, access, secret, own, peers):
             n_short, ids, n_ec = parse_ec_short(vl)
             limit_mb = parse_volume_size_limit_mb(vl)
             n_ro, n_ro_bad, _ro_ids = parse_readonly_volumes(vl, limit_mb)
+            n_under, n_over, _u, _o = parse_replica_counts(vl)
             filers = None
             for _ in range(4):  # the shell can list the filers a moment after it starts
                 filers = parse_filers(weed_shell(a.weed, a.masters, ["cluster.ps", "cluster.ps"]))
@@ -773,13 +814,14 @@ def cluster_check(state, a, access, secret, own, peers):
             nodes, writable = parse_cluster_status(weed_shell(a.weed, a.masters, ["cluster.status"]))
             missing = missing + write_path_problems(nodes, writable, a.expected_nodes or len(peers) + 1)
             cluster_fields = dict(ec_volumes=n_ec, ec_volumes_short=n_short, ec_short_ids=ids[:20], filers_in_ring=filers, topology_nodes=nodes, writable_volumes=writable, raft_peers=raft,
-                                  volumes_readonly=n_ro, volumes_readonly_abnormal=n_ro_bad, volume_size_limit_mb=limit_mb)
-        state.set(filer_lag_max_s=lag, cluster_leader=(None if leader is None else (1 if leader else 0)), **cluster_fields,
+                                  cluster_volumes_readonly=n_ro, cluster_volumes_readonly_abnormal=n_ro_bad, volume_size_limit_mb=limit_mb,
+                                  volumes_under_replicated=n_under, volumes_over_replicated=n_over)
+        state.set(filer_lag_max_s=lag, cluster_leader=(-1 if leader is None else (1 if leader else 0)), **cluster_fields,
                   filer_peers_not_answering=len(missing), filer_peers_missing=missing, own_gateway_busy=1 if busy else 0, write_probe_s=put_s, own_gateway_busy_reason=busy, cluster_error=None,
                   cluster_checked=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     except Exception as e:  # a check that cannot run counts as failed (a hung master makes the shell time out: exactly when the answer matters)
         why = "cluster check failed: " + repr(e)[:160]
-        state.set(cluster_error=repr(e)[:200], filer_lag_max_s=None, topology_nodes=None, writable_volumes=None, raft_peers=None, volumes_readonly=None, volumes_readonly_abnormal=None,
+        state.set(cluster_error=repr(e)[:200], cluster_leader=-1, filer_lag_max_s=None, topology_nodes=None, writable_volumes=None, raft_peers=None, cluster_volumes_readonly=None, cluster_volumes_readonly_abnormal=None,
                   filer_peers_not_answering=max(1, len(peers)), filer_peers_missing=[why])
 
 
@@ -805,6 +847,8 @@ def main():
     p.add_argument("--trim-fast-above", type=int, default=0, help="MiB of charged usage above which the governor samples every --trim-fast-interval seconds instead of every 30 (0 = off)")
     p.add_argument("--trim-fast-interval", type=float, default=5.0)
     p.add_argument("--trim-min-age", type=int, default=600, help="seconds a volume file must be unchanged before it is touched")
+    p.add_argument("--volume-status", help="https URL of this box's own volume server /status (read-only volumes of THIS box)")
+    p.add_argument("--volume-size-limit-mb", type=int, default=0, help="the master's volume size limit, for the abnormal read-only rule (half of it)")
     p.add_argument("--budgets", help="JSON {unit: MiB}, the one declared RAM budget file; the units array reports each unit's RSS against it")
     p.add_argument("--cluster", action="store_true")
     p.add_argument("--weed")
@@ -821,6 +865,7 @@ def main():
     state = State()
     if a.trim_dir and a.trim_high > 0:
         threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age, 30.0, a.trim_ldb_dir, a.trim_fast_above, a.trim_fast_interval), daemon=True).start()
+    VOLUME_STATUS.update(url=a.volume_status, ca=a.cacert, cert=a.tls_cert, key=a.tls_key, limit_mb=a.volume_size_limit_mb)
     threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval, a.budgets), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()

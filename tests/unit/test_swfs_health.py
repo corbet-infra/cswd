@@ -476,5 +476,41 @@ class FailureSignalsTest(unittest.TestCase):
         self.assertEqual((m["ram_oom_kill"], m["ram_under_oom"]), (4, 0))
 
 
+class ReplicationAndLocalReadonlyTest(unittest.TestCase):
+    def test_replica_counts_against_the_placement(self):
+        vl = "".join("          volume Id:%d, Size:1, ReplicaPlacement:010, Collection:c, Version:3\n" % v for v in (1, 1, 2, 3, 3, 3))
+        vl += "          volume Id:4, Size:1, ReplicaPlacement:000, Collection:c, Version:3\n"
+        under, over, u, o = sh.parse_replica_counts(vl)
+        self.assertEqual((under, over, u, o), (1, 1, ["2"], ["3"]))
+
+    def test_local_volume_readonly_from_status(self):
+        import http.server, json, threading
+        body = json.dumps({"Volumes": [{"Id": 1, "Size": 100, "ReadOnly": True}, {"Id": 2, "Size": 6 * 1024 ** 3, "ReadOnly": True}, {"Id": 3, "Size": 5, "ReadOnly": False}]}).encode()
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = "http://127.0.0.1:%d/status" % srv.server_address[1]
+            self.assertEqual(sh.local_volume_readonly(url, None, None, None, 8192), (2, 1))  # 6 GiB is over half of 8192 MB: normal; 100 B is abnormal
+        finally:
+            srv.shutdown()
+        self.assertEqual(sh.local_volume_readonly("http://127.0.0.1:1/status", None, None, None, 8192), (None, None))
+
+    def test_units_not_loaded_are_not_reported(self):
+        out = ("Id=seaweed-master.service\nLoadState=loaded\nActiveState=active\nResult=success\nNRestarts=0\n\n"
+               "Id=seaweed-s3.service\nLoadState=not-found\nActiveState=inactive\nResult=success\nNRestarts=0\n")
+        st = sh.unit_states(run=lambda c: out)
+        self.assertIn("weed-master", st)
+        self.assertNotIn("weed-s3", st)
+
+
 if __name__ == "__main__":
     unittest.main()

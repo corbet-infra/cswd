@@ -213,3 +213,9 @@ seaweed_retired_units:
   - crfs-quota.timer       # RustFS-era quota agent (crfs-agent, removed with the retired files); enabled on cld-3, -5, -6 it fired a failing service every 5 min
   - crfs-quota.service
   - rustfs.service         # RustFS store, retired since the cluster runs SeaweedFS (2026-10-27)
+
+# The governor may also drop the page cache of the filer's leveldb tables (immutable .ldb files in data/seaweed-filer/ldb). Every filer holds a full copy of the cluster's metadata, so this
+# cache grows with the number of stored objects, not with traffic (cld-0: 9 MiB resident on 2026-11-18 morning, 328 MiB that afternoon). Cost: metadata reads of tables not read within the
+# min age go to the disk. Off by default; a canary on cld-0 with S3 latency probes before and after.
+seaweed_cache_trim_ldb: false
+

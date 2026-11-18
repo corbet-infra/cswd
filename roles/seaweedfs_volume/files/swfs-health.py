@@ -518,12 +518,35 @@ def trim_candidates(data_dir, now, min_age_s):
     return [p for _t, p in out]
 
 
+LDB_FILE_RE = re.compile(r"\.ldb$")
+
+
+def ldb_candidates(ldb_dir, now, min_age_s):
+    """The immutable sorted tables (NNNNNN.ldb) of the filer's leveldb, coldest first, none changed in the last min_age_s seconds. Never MANIFEST, CURRENT, LOG or the
+    write-ahead .log: only files whose name ends in .ldb (leveldb never rewrites a table in place)."""
+    out = []
+    for root, _dirs, names in os.walk(ldb_dir):
+        for name in names:
+            if not LDB_FILE_RE.search(name):
+                continue
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if not stat_is_regular(st) or now - st.st_mtime < min_age_s:
+                continue
+            out.append((max(st.st_atime, st.st_mtime), path))
+    out.sort()
+    return [p for _t, p in out]
+
+
 def stat_is_regular(st):
     import stat as _stat
     return _stat.S_ISREG(st.st_mode)
 
 
-def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgroup_usage_mib, advise=None, log=None):
+def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgroup_usage_mib, advise=None, log=None, ldb_dir=None):
     """When the account's charged usage is above high_mib, drop the clean page cache of volume files (posix_fadvise DONTNEED), coldest first, until usage
     is below low_mib. Returns (files_advised, freed_mib, wall_s, cpu_s); freed is the usage drop, wall_s/cpu_s the cost of the pass itself.
     One log line per trim, on stderr (health.log), since stdout goes to a journal nobody can read."""
@@ -535,7 +558,11 @@ def trim_once(data_dir, uid, high_mib, low_mib, min_age_s, now=None, usage=cgrou
     t0 = time.perf_counter()
     c0 = time.process_time()
     n = 0
-    for path in trim_candidates(data_dir, time.time() if now is None else now, min_age_s):
+    t_now = time.time() if now is None else now
+    paths = trim_candidates(data_dir, t_now, min_age_s)
+    if ldb_dir:  # the filer's leveldb tables are tried after the volume files
+        paths = paths + ldb_candidates(ldb_dir, t_now, min_age_s)
+    for path in paths:
         advise(path)
         n += 1
         u = usage(uid)
@@ -560,13 +587,13 @@ def _advise_dontneed(path):
         os.close(fd)
 
 
-def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0):
+def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0, ldb_dir=None):
     trims = 0
     freed_total = 0.0
     wall_total = 0.0
     cpu_total = 0.0
     while True:
-        n, freed, wall, cpu = trim_once(data_dir, uid, high_mib, low_mib, min_age_s)
+        n, freed, wall, cpu = trim_once(data_dir, uid, high_mib, low_mib, min_age_s, ldb_dir=ldb_dir)
         if n:
             trims += 1
             freed_total += freed
@@ -634,6 +661,7 @@ def main():
     p.add_argument("--trim-dir", help="the volume directory whose clean files may be dropped from the page cache when the account's charged usage is high")
     p.add_argument("--trim-high", type=int, default=0, help="MiB of charged usage above which the cache governor trims (0 = off)")
     p.add_argument("--trim-low", type=int, default=0, help="MiB to trim down to")
+    p.add_argument("--trim-ldb-dir", help="also drop the cache of the immutable .ldb tables of the filer's leveldb in this directory (after the volume files)")
     p.add_argument("--trim-min-age", type=int, default=600, help="seconds a volume file must be unchanged before it is touched")
     p.add_argument("--budgets", help="JSON {unit: MiB}, the one declared RAM budget file; the units array reports each unit's RSS against it")
     p.add_argument("--cluster", action="store_true")
@@ -650,7 +678,7 @@ def main():
     a = p.parse_args()
     state = State()
     if a.trim_dir and a.trim_high > 0:
-        threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age), daemon=True).start()
+        threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age, 30.0, a.trim_ldb_dir), daemon=True).start()
     threading.Thread(target=local_loop, args=(state, os.getuid(), a.interval, a.budgets), daemon=True).start()
     if a.cluster:
         threading.Thread(target=cluster_loop, args=(state, a), daemon=True).start()

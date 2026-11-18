@@ -346,5 +346,33 @@ class CacheGovernorTest(unittest.TestCase):
         self.assertEqual(sh.trim_once(d, 0, 900, 850, 600, now=now, usage=lambda _u: 800.0, advise=advise, log=lines.append), (0, 0.0, 0.0, 0.0))
 
 
+class LdbGovernorTest(unittest.TestCase):
+    def test_only_old_ldb_tables_are_candidates(self):
+        import os, tempfile
+        now = 1_000_000.0
+        d = tempfile.mkdtemp()
+        sub = os.path.join(d, "01")
+        os.makedirs(sub)
+        for name, age in {"001221.ldb": 5000, "001222.ldb": 100, "MANIFEST-000005": 99999, "CURRENT": 99999, "LOG": 99999, "000009.log": 99999, "LOCK": 99999}.items():
+            p = os.path.join(sub, name)
+            open(p, "w").write("x")
+            os.utime(p, (now - age, now - age))
+        got = [os.path.basename(p) for p in sh.ldb_candidates(d, now, 120)]
+        self.assertEqual(got, ["001221.ldb"])
+
+    def test_trim_once_tries_volume_files_then_ldb_tables(self):
+        import os, tempfile
+        now = 1_000_000.0
+        vd = tempfile.mkdtemp()
+        ld = tempfile.mkdtemp()
+        for d, name in ((vd, "a_1.dat"), (ld, "000001.ldb")):
+            p = os.path.join(d, name)
+            open(p, "w").write("x")
+            os.utime(p, (now - 5000, now - 5000))
+        seen = []
+        sh.trim_once(vd, 0, 900, 850, 120, now=now, usage=lambda _u: 950.0, advise=seen.append, log=lambda m: None, ldb_dir=ld)
+        self.assertEqual([os.path.basename(p) for p in seen], ["a_1.dat", "000001.ldb"])
+
+
 if __name__ == "__main__":
     unittest.main()

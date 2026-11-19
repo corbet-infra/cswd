@@ -65,3 +65,34 @@
   ignore_errors: "{{ ansible_check_mode }}"
   environment:
     XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts['user_uid'] }}"
+
+- name: the provider's Pikkumies agent kept off (crontab lines out, processes stopped by exact PID)
+  when: pmd_pikkumies_off | bool
+  block:
+    - name: crontab without pikkumies lines
+      ansible.builtin.shell: |
+        set -eu
+        cur=$(crontab -l 2>/dev/null || true)
+        if printf '%s\n' "$cur" | grep -qi pikkumies; then
+          printf '%s\n' "$cur" | grep -vi pikkumies | crontab -
+          echo CHANGED
+        fi
+      args:
+        executable: /bin/bash
+      register: pmd_pik_cron
+      changed_when: "'CHANGED' in pmd_pik_cron.stdout"
+      check_mode: false
+    - name: Pikkumies processes stopped (exact PIDs of this uid whose command line names ~/.mcxPikkumies)
+      ansible.builtin.shell: |
+        n=0
+        for p in $(pgrep -u "$(id -u)" -f '[m]cxPikkumies/'); do
+          [ "$p" = "$$" ] && continue
+          kill -TERM "$p" 2>/dev/null && n=$((n+1))
+        done
+        [ "$n" -gt 0 ] && echo "STOPPED $n"
+        exit 0
+      args:
+        executable: /bin/bash
+      register: pmd_pik_proc
+      changed_when: "'STOPPED' in pmd_pik_proc.stdout"
+      check_mode: false

@@ -792,6 +792,148 @@ def trim_loop(state, uid, data_dir, high_mib, low_mib, min_age_s, interval=30.0,
         time.sleep(wait)
 
 
+GUARD_CORE_PATTERNS = ("/bin/weed-", "otelcol", "node_exporter", "swfs-health", "swfs-master-guard", "swfs-filerwatch", "swfs-docker-guard", "systemd", "sshd", "(sd-pam)", "dbus-daemon")
+GUARD_MIN_RSS_MIB = 10.0
+
+
+def list_user_processes(uid, proc="/proc"):
+    """[(pid, rss_mib, args)] of this uid's processes, from /proc."""
+    out = []
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return out
+    for n in names:
+        if not n.isdigit():
+            continue
+        try:
+            if os.stat("%s/%s" % (proc, n)).st_uid != uid:
+                continue
+            args = open("%s/%s/cmdline" % (proc, n), "rb").read().replace(b"\0", b" ").decode("utf8", "replace").strip()
+            rss_pages = int(open("%s/%s/statm" % (proc, n)).read().split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        out.append((int(n), rss_pages * os.sysconf("SC_PAGE_SIZE") / 1048576.0, args))
+    return out
+
+
+def guard_victims(procs, protected_pids, core=GUARD_CORE_PATTERNS, min_rss=GUARD_MIN_RSS_MIB):
+    """Processes outside the declared core units, largest first: never a pid in protected_pids (the guard itself and its ancestors), never a command line holding a core pattern,
+    never one below min_rss (small shells and sessions are not the problem)."""
+    out = []
+    for pid, rss, args in procs:
+        if pid in protected_pids or rss < min_rss or not args:
+            continue
+        if any(c in args for c in core):
+            continue
+        out.append((rss, pid, args))
+    out.sort(reverse=True)
+    return [(pid, rss, args) for rss, pid, args in out]
+
+
+def guard_once(uid, high_mib, max_kills=3, usage=cgroup_usage_mib, listproc=None, kill=None, log=None, protected=None):
+    """When the account's charged usage is above high_mib, SIGTERM (then SIGKILL after 3 s if it lives) the largest non-core processes, by exact PID, at most max_kills per pass.
+    Returns the number killed. One log line per kill on stderr (health.log)."""
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    u = usage(uid)
+    if u is None or u <= high_mib:
+        return 0
+    listproc = listproc or (lambda: list_user_processes(uid))
+    kill = kill or (lambda pid, sig: os.kill(pid, sig))
+    prot = protected if protected is not None else {os.getpid(), os.getppid()}
+    n = 0
+    for pid, rss, args in guard_victims(listproc(), prot)[:max_kills]:
+        log("guard: charged %.0f MiB > %d, stopping pid %d (%.0f MiB rss) %s" % (u, high_mib, pid, rss, args[:120]))
+        try:
+            kill(pid, 15)
+            n += 1
+        except OSError as e:
+            log("guard: pid %d: %s" % (pid, e))
+    return n
+
+
+def probe_seconds(status_url, cacert, cert, key, timeout=8):
+    """Seconds this box's own volume server took to answer /status, None when it did not (or not in time)."""
+    import urllib.request
+    t0 = time.time()
+    try:
+        ctx = None
+        if status_url.startswith("https"):
+            ctx = ssl.create_default_context(cafile=cacert)
+            ctx.load_cert_chain(cert, key)
+            ctx.check_hostname = False
+        with urllib.request.urlopen(status_url, timeout=timeout, context=ctx) as r:
+            r.read(1024)
+    except Exception:
+        return None
+    return time.time() - t0
+
+
+def degrade_step(st, now, psi_io, probe_s, stall_psi=90.0, stall_s=120.0, slow_s=5.0, recover_psi=50.0, recover_s=300.0):
+    """Automatic degrade of a stalled box, one sample. st is a dict kept by the caller. A box is STALLED while the host IO pressure (avg10) is above stall_psi AND its own volume server
+    answers /status slower than slow_s or not at all: the host-wide pressure alone is the neighbourhood, the probe is this box's own evidence. Stalled for stall_s in a row -> "stop" (the
+    volume server leaves the master's topology within seconds, the gateways of the other boxes read the replicas and reconstruct the EC shards elsewhere). While degraded, the host pressure
+    below recover_psi for recover_s in a row -> "start". Returns "stop", "start" or None."""
+    if not st.get("degraded"):
+        stalled = psi_io is not None and psi_io > stall_psi and (probe_s is None or probe_s > slow_s)
+        if not stalled:
+            st["since"] = None
+            return None
+        st["since"] = st.get("since") or now
+        if now - st["since"] >= stall_s:
+            st.update(degraded=True, since=None)
+            return "stop"
+        return None
+    calm = psi_io is not None and psi_io < recover_psi
+    if not calm:
+        st["since"] = None
+        return None
+    st["since"] = st.get("since") or now
+    if now - st["since"] >= recover_s:
+        st.update(degraded=False, since=None)
+        return "start"
+    return None
+
+
+def degrade_loop(state, vol_status, interval=15.0, unit=UNIT_SERVICES["weed-volume"], run=None, psi=None, probe=None, log=None, clock=time.time, sleep=time.sleep, once=False):
+    run = run or (lambda action: subprocess.run(["systemctl", "--user", action, unit], capture_output=True, text=True, timeout=60).returncode)
+    psi = psi or (lambda: host_psi_avg10("io"))
+    probe = probe or (lambda: probe_seconds(vol_status["url"], vol_status["ca"], vol_status["cert"], vol_status["key"]) if vol_status.get("url") else None)
+    log = log or (lambda m: print(m, file=sys.stderr, flush=True))
+    st = {}
+    n = 0
+    while True:
+        act = degrade_step(st, clock(), psi(), probe() if not st.get("degraded") else None)
+        if act:
+            rc = run(act)
+            n += 1 if act == "stop" else 0
+            log("degrade: %s of %s, rc=%s" % (act, unit, rc))
+            if rc != 0:
+                st["degraded"] = (act != "stop") if act == "start" else False
+        state.set(degraded=1 if st.get("degraded") else 0, degrade_stops_total=n)
+        if once:
+            return st
+        sleep(interval)
+
+
+def host_psi_avg10(kind, path="/proc/pressure"):
+    try:
+        for line in open("%s/%s" % (path, kind)):
+            if line.startswith("some "):
+                return float(dict(kv.split("=") for kv in line.split()[1:])["avg10"])
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def guard_loop(state, uid, high_mib, interval=10.0):
+    kills = 0
+    while True:
+        kills += guard_once(uid, high_mib)
+        state.set(guard_kills_total=kills, guard_high_mib=high_mib)
+        time.sleep(interval)
+
+
 def local_loop(state, uid, interval, budgets_path=None):
     while True:
         ws, usage, limit = cgroup_working_set_mib(uid)
@@ -866,6 +1008,8 @@ def main():
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--interval", type=float, default=60)
     p.add_argument("--trim-dir", help="the volume directory whose clean files may be dropped from the page cache when the account's charged usage is high")
+    p.add_argument("--guard-high", type=int, default=0, help="charged MiB above which processes outside the core units are stopped, largest first (0 = off)")
+    p.add_argument("--degrade", action="store_true", help="stop this box's volume server while it is stalled (host IO PSI above 90 percent for 2 min and its own /status not answering in 5 s); start it again after 5 calm minutes")
     p.add_argument("--trim-high", type=int, default=0, help="MiB of charged usage above which the cache governor trims (0 = off)")
     p.add_argument("--trim-low", type=int, default=0, help="MiB to trim down to")
     p.add_argument("--trim-log-dir", help="also drop the cache of the *.log files in this directory (after the volume files and ldb tables)")
@@ -889,6 +1033,11 @@ def main():
     p.add_argument("--tls-key")
     a = p.parse_args()
     state = State()
+    VOLUME_STATUS.update(url=a.volume_status, ca=a.cacert, cert=a.tls_cert, key=a.tls_key, limit_mb=a.volume_size_limit_mb)
+    if a.degrade and a.volume_status:
+        threading.Thread(target=degrade_loop, args=(state, VOLUME_STATUS), daemon=True).start()
+    if a.guard_high > 0:
+        threading.Thread(target=guard_loop, args=(state, os.getuid(), a.guard_high), daemon=True).start()
     if a.trim_dir and a.trim_high > 0:
         threading.Thread(target=trim_loop, args=(state, os.getuid(), a.trim_dir, a.trim_high, a.trim_low or a.trim_high - 50, a.trim_min_age, 30.0, a.trim_ldb_dir, a.trim_fast_above, a.trim_fast_interval, a.trim_log_dir), daemon=True).start()
     VOLUME_STATUS.update(url=a.volume_status, ca=a.cacert, cert=a.tls_cert, key=a.tls_key, limit_mb=a.volume_size_limit_mb)

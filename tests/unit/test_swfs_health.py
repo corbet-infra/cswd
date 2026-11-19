@@ -361,6 +361,59 @@ class LdbGovernorTest(unittest.TestCase):
         got = [os.path.basename(p) for p in sh.ldb_candidates(d, now, 120)]
         self.assertEqual(got, ["001221.ldb"])
 
+    def test_guard_picks_largest_non_core_and_spares_core(self):
+        procs = [(10, 300.0, "/home/u/cold/bin/weed-4.51-cw2/weed volume"), (11, 120.0, "php /home/u/.mcxPikkumies/pikkumies/bin/pikkumies cron-tick"),
+                 (12, 60.0, "python3 hermes worker"), (13, 5.0, "php tiny"), (14, 80.0, "/usr/bin/python3 /home/u/cold/bin/swfs-health.py --port 1"), (15, 200.0, "sshd: u@pts/0"),
+                 (16, 90.0, "weed shell -master=x")]
+        got = [p for p, _r, _a in sh.guard_victims(procs, {99})]
+        self.assertEqual(sorted(got), [11, 12, 16])
+        self.assertEqual(got[0], 11)
+        self.assertEqual([p for p, _r, _a in sh.guard_victims(procs, {11})][0], 16)
+
+    def test_guard_once_kills_only_above_threshold_and_at_most_three(self):
+        procs = [(i, 50.0 + i, "worker %d" % i) for i in range(20, 26)]
+        killed = []
+        n = sh.guard_once(1, 1150, usage=lambda uid: 1100, listproc=lambda: procs, kill=lambda p, s: killed.append(p), log=lambda m: None, protected=set())
+        self.assertEqual((n, killed), (0, []))
+        n = sh.guard_once(1, 1150, usage=lambda uid: 1200, listproc=lambda: procs, kill=lambda p, s: killed.append(p), log=lambda m: None, protected=set())
+        self.assertEqual((n, killed), (3, [25, 24, 23]))
+
+    def test_degrade_needs_psi_and_a_failing_own_probe_for_two_minutes_then_recovers(self):
+        st = {}
+        self.assertIsNone(sh.degrade_step(st, 0, 95.0, 0.2))              # pressure alone (the neighbourhood) is not a stall
+        self.assertIsNone(sh.degrade_step(st, 10, 95.0, None))            # stalled, clock starts
+        self.assertIsNone(sh.degrade_step(st, 100, 95.0, 9.0))
+        self.assertIsNone(sh.degrade_step(st, 105, 40.0, None))           # pressure dropped: clock resets
+        self.assertIsNone(sh.degrade_step(st, 110, 95.0, None))
+        self.assertEqual(sh.degrade_step(st, 231, 96.0, None), "stop")
+        self.assertTrue(st["degraded"])
+        self.assertIsNone(sh.degrade_step(st, 300, 30.0, None))           # calm clock starts
+        self.assertIsNone(sh.degrade_step(st, 500, 70.0, None))           # not calm enough: reset
+        self.assertIsNone(sh.degrade_step(st, 510, 20.0, None))
+        self.assertEqual(sh.degrade_step(st, 811, 20.0, None), "start")
+        self.assertFalse(st["degraded"])
+
+    def test_degrade_loop_stops_and_exports(self):
+        calls = []
+        class S:
+            def __init__(self): self.d = {}
+            def set(self, **k): self.d.update(k)
+        state = S(); t = [0.0]
+        def clock(): return t[0]
+        def sleep(_s): t[0] += 60.0
+        class Stop(Exception): pass
+        n = [0]
+        def psi():
+            n[0] += 1
+            if n[0] > 6: raise Stop()
+            return 97.0
+        try:
+            sh.degrade_loop(state, {"url": "x"}, run=lambda a: calls.append(a) or 0, psi=psi, probe=lambda: None, log=lambda m: None, clock=clock, sleep=sleep)
+        except Stop:
+            pass
+        self.assertEqual(calls, ["stop"])
+        self.assertEqual((state.d["degraded"], state.d["degrade_stops_total"]), (1, 1))
+
     def test_only_old_log_files_are_candidates(self):
         import os, tempfile
         now = 1_000_000.0

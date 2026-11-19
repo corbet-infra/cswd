@@ -244,3 +244,15 @@ seaweed_cache_trim_fast_interval_s: 5
 # (cattle): a loopback port needs no provider assignment. swfs-health.py has the same constant.
 seaweed_s3_metrics_port: 19327
 
+
+# The provider's Pikkumies agent kept off on every cld box (cattle): see pmd_account/defaults. Identical on all seven.
+seaweed_pikkumies_off: true
+
+# Memory guard in swfs-health: above this many charged MiB (limit 1250) the largest processes OUTSIDE the declared core units (weed units, otelcol, node_exporter, the swfs-* scripts, systemd, sshd) are
+# stopped by exact PID, at most 3 per 10 s. Exported as swfs_health_guard_kills_total. Identical on all seven. 0 = off.
+seaweed_guard_high_mib: 1150
+
+# Automatic degrade of a stalled box: swfs-health stops this box's own volume server while the host IO PSI (avg10) is above 90 percent for 2 minutes AND its /status does not answer in 5 s,
+# and starts it after 5 calm minutes (PSI below 50). Out of the topology the gateways of the other boxes read the replicas / reconstruct the EC shards elsewhere. Identical on all seven.
+# The cw2 heartbeat-liveness patch does not cover this: it only drops a heartbeat stream to a stuck MASTER; a starved volume server keeps heartbeating.
+seaweed_degrade: true

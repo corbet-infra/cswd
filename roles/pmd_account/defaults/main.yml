@@ -11,3 +11,7 @@ pmd_docker_guard_enable: false
 pmd_docker_guard_act: false
 # Make dockerd refuse to start: a text line (invalid JSON) in the account's own ~/.config/docker/daemon.json; the provider's original is kept as daemon.json.provider.
 pmd_docker_neutralize_daemon_json: false
+
+# The provider's Pikkumies agent (~/.mcxPikkumies, cron every minute + a daily update) is a PHP/python swarm that thrashed cld-4's 1250 MiB cgroup into swap (2026-11-19). When true: its crontab lines
+# are removed and its processes stopped by exact PID on every run, so a roll restores the state if the provider's platform puts it back. The files are left (disk only, no recursive delete).
+pmd_pikkumies_off: false

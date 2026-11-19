@@ -366,6 +366,7 @@
   vars:
     pmd_docker_guard_enable: true
     pmd_docker_guard_act: "{{ seaweed_docker_guard_act }}"
+    pmd_pikkumies_off: "{{ seaweed_pikkumies_off }}"
     pmd_docker_neutralize_daemon_json: "{{ seaweed_docker_neutralize_daemon_json }}"
     pmd_base_dir: "{{ seaweed_base_dir }}"
 

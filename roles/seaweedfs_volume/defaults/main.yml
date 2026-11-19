@@ -195,6 +195,14 @@ seaweed_retired_files:
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/crfs-quota.timer"        # RustFS-era quota timer (every 5 min), its agent crfs-agent is gone; swfs-health reports the quota from ~/.quota now
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/crfs-quota.service"      # its service
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/rustfs.service"          # the RustFS unit (inactive, disabled everywhere)
+  - path: "{{ seaweed_base_dir }}/etc/rustfs.env"                        # RustFS-era environment file (2026-10-25); nothing reads it since the move to SeaweedFS
+  - path: "{{ seaweed_base_dir }}/etc/s3-ops.env"                        # RustFS-era ops credentials stub; nothing reads it
+  - path: "{{ seaweed_base_dir }}/tls-rustfs/ca.crt"                     # RustFS-era copies of the cluster certificate files (identical to tls/); no unit refers to them
+    dir: "{{ seaweed_base_dir }}/tls-rustfs"
+  - path: "{{ seaweed_base_dir }}/tls-rustfs/rustfs_cert.pem"
+    dir: "{{ seaweed_base_dir }}/tls-rustfs"
+  - path: "{{ seaweed_base_dir }}/tls-rustfs/rustfs_key.pem"
+    dir: "{{ seaweed_base_dir }}/tls-rustfs"
   - path: "{{ ansible_facts['user_dir'] }}/.config/systemd/user/swfs-ec-maint.service"   # its service (scrub + cleanup --threshold 0.3 without --apply)
   - path: "{{ seaweed_bin_dir }}/swfs-ec-maintain.sh"                                    # its script (7,761 bytes, 2026-11-04); the role no longer ships it
   - path: "{{ ansible_facts['user_dir'] }}/.seaweedfs/ec-maint.env"                      # its configuration (written with the script, no secret)
